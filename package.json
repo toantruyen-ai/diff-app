@@ -1,0 +1,16 @@
+{
+  "name": "k8s-env-diff",
+  "version": "1.0.0",
+  "description": "Compare Kubernetes application environment variables across clusters",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "@kubernetes/client-node": "^0.21.0"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0"
+  }
+}

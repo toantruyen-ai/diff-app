@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>K8s ENV Diff</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Title bar -->
+    <header class="titlebar">
+      <span class="titlebar-icon">⎈</span>
+      <h1 class="titlebar-title">K8s ENV Diff</h1>
+      <div class="titlebar-actions">
+        <button id="btn-compare" class="btn btn-primary" disabled>Compare</button>
+        <button id="btn-clear" class="btn btn-ghost">Clear</button>
+      </div>
+    </header>
+
+    <!-- Selector panels -->
+    <div class="selectors-row">
+      <!-- Left column -->
+      <div class="selector-panel" id="panel-left">
+        <div class="panel-label">
+          <span class="badge badge-left">A</span>
+          <span>Source</span>
+        </div>
+        <div class="selector-grid">
+          <div class="field-group">
+            <label>Kubeconfig</label>
+            <div class="file-input-row">
+              <input type="text" id="left-kubeconfig" placeholder="Default (~/.kube/config)" readonly />
+              <button class="btn btn-sm" id="left-btn-browse">Browse</button>
+              <button class="btn btn-sm btn-ghost" id="left-btn-default" title="Use default kubeconfig">↺</button>
+            </div>
+          </div>
+          <div class="field-group">
+            <label>Context</label>
+            <select id="left-context" disabled>
+              <option value="">— select context —</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Namespace</label>
+            <select id="left-namespace" disabled>
+              <option value="">— select namespace —</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Deployment</label>
+            <select id="left-deployment" disabled>
+              <option value="">— select deployment —</option>
+            </select>
+          </div>
+        </div>
+        <div class="panel-status" id="left-status"></div>
+      </div>
+
+      <div class="vs-divider">
+        <span>VS</span>
+      </div>
+
+      <!-- Right column -->
+      <div class="selector-panel" id="panel-right">
+        <div class="panel-label">
+          <span class="badge badge-right">B</span>
+          <span>Target</span>
+        </div>
+        <div class="selector-grid">
+          <div class="field-group">
+            <label>Kubeconfig</label>
+            <div class="file-input-row">
+              <input type="text" id="right-kubeconfig" placeholder="Default (~/.kube/config)" readonly />
+              <button class="btn btn-sm" id="right-btn-browse">Browse</button>
+              <button class="btn btn-sm btn-ghost" id="right-btn-default" title="Use default kubeconfig">↺</button>
+            </div>
+          </div>
+          <div class="field-group">
+            <label>Context</label>
+            <select id="right-context" disabled>
+              <option value="">— select context —</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Namespace</label>
+            <select id="right-namespace" disabled>
+              <option value="">— select namespace —</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Deployment</label>
+            <select id="right-deployment" disabled>
+              <option value="">— select deployment —</option>
+            </select>
+          </div>
+        </div>
+        <div class="panel-status" id="right-status"></div>
+      </div>
+    </div>
+
+    <!-- Filter bar -->
+    <div class="filter-bar" id="filter-bar" style="display:none">
+      <div class="filter-left">
+        <input type="text" id="search-input" placeholder="Filter by key name…" />
+        <div class="filter-toggles">
+          <button class="toggle-btn active" id="filter-all" data-filter="all">All</button>
+          <button class="toggle-btn" id="filter-diff" data-filter="diff">
+            <span class="dot dot-diff"></span> Different
+          </button>
+          <button class="toggle-btn" id="filter-same" data-filter="same">
+            <span class="dot dot-same"></span> Same
+          </button>
+          <button class="toggle-btn" id="filter-missing" data-filter="missing">
+            <span class="dot dot-missing"></span> Missing
+          </button>
+        </div>
+      </div>
+      <div class="filter-right">
+        <div class="stats" id="stats"></div>
+        <label class="toggle-secrets">
+          <input type="checkbox" id="toggle-mask" checked />
+          Mask secret values
+        </label>
+      </div>
+    </div>
+
+    <!-- Comparison table -->
+    <div class="table-wrapper" id="table-wrapper">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-icon">⎈</div>
+        <p>Select deployments from both sides and click <strong>Compare</strong></p>
+      </div>
+      <table class="diff-table" id="diff-table" style="display:none">
+        <thead>
+          <tr>
+            <th class="col-key">ENV Key</th>
+            <th class="col-source">Source</th>
+            <th class="col-value col-a">
+              <span class="badge badge-left">A</span>
+              <span id="th-left-label">—</span>
+            </th>
+            <th class="col-value col-b">
+              <span class="badge badge-right">B</span>
+              <span id="th-right-label">—</span>
+            </th>
+            <th class="col-status">Status</th>
+          </tr>
+        </thead>
+        <tbody id="diff-body"></tbody>
+      </table>
+    </div>
+
+    <!-- Loading overlay -->
+    <div class="loading-overlay" id="loading-overlay" style="display:none">
+      <div class="spinner"></div>
+      <p id="loading-text">Loading…</p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
