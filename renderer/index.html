@@ -20,12 +20,14 @@
 
     <!-- Selector panels -->
     <div class="selectors-row">
-      <!-- Left column -->
+
+      <!-- ── Left / A panel ─────────────────────────────────────────────── -->
       <div class="selector-panel" id="panel-left">
         <div class="panel-label">
           <span class="badge badge-left">A</span>
           <span>Source</span>
         </div>
+
         <div class="selector-grid">
           <div class="field-group">
             <label>Kubeconfig</label>
@@ -47,21 +49,39 @@
               <option value="">— select namespace —</option>
             </select>
           </div>
+
+          <!-- Deployment field with view toggle -->
           <div class="field-group">
-            <label>Deployment</label>
+            <div class="dep-label-row">
+              <label>Deployment</label>
+              <div class="dep-view-btns" id="left-dep-view-btns" style="display:none">
+                <button class="dep-view-btn active" data-depview="select" title="Dropdown">▾ Select</button>
+                <button class="dep-view-btn" data-depview="list" title="List view">≡ List</button>
+              </div>
+            </div>
+            <!-- Select view (default) -->
             <select id="left-deployment" disabled>
               <option value="">— select deployment —</option>
             </select>
           </div>
         </div>
+
+        <!-- List view (shown when ≡ List is active) -->
+        <div id="left-dep-list-wrap" class="dep-list-wrap" style="display:none">
+          <div class="dep-list-toolbar">
+            <span class="dep-list-count" id="left-dep-count"></span>
+            <span class="dep-list-hint">Click to auto-compare with B</span>
+            <input type="text" id="left-dep-search" placeholder="Filter…" />
+          </div>
+          <div id="left-dep-list" class="dep-list-inline"></div>
+        </div>
+
         <div class="panel-status" id="left-status"></div>
       </div>
 
-      <div class="vs-divider">
-        <span>VS</span>
-      </div>
+      <div class="vs-divider"><span>VS</span></div>
 
-      <!-- Right column -->
+      <!-- ── Right / B panel ────────────────────────────────────────────── -->
       <div class="selector-panel" id="panel-right">
         <div class="panel-label">
           <span class="badge badge-right">B</span>

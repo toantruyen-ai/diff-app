@@ -133,7 +133,7 @@ body {
 /* ── Selector panels ─────────────────────────────────────────────────────── */
 .selectors-row {
   display: flex;
-  align-items: stretch;
+  align-items: flex-start;
   gap: 0;
   padding: 14px 16px;
   background: var(--bg-surface);
@@ -199,14 +199,13 @@ input[type="text"]:focus, select:focus { border-color: var(--accent); }
 input[type="text"][readonly] { cursor: default; color: var(--text-dim); }
 select { cursor: pointer; }
 select:disabled { opacity: 0.5; cursor: not-allowed; }
-
 select option { background: var(--bg-surface2); }
 
 .vs-divider {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 0 16px;
+  padding: 28px 16px 0;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
@@ -227,8 +226,153 @@ select option { background: var(--bg-surface2); }
   color: var(--text-dim);
   min-height: 16px;
 }
-.panel-status.error { color: var(--red); }
+.panel-status.error   { color: var(--red); }
 .panel-status.success { color: var(--green); }
+
+/* ── Deployment sub-view toggle ──────────────────────────────────────────── */
+.dep-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.dep-view-btns {
+  display: flex;
+  gap: 2px;
+}
+
+.dep-view-btn {
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+.dep-view-btn:hover { background: var(--bg-hover); color: var(--text-dim); }
+.dep-view-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* ── Inline deployment list (shown inside panel A) ───────────────────────── */
+.dep-list-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 200px;
+}
+
+.dep-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: var(--bg-surface2);
+  border-bottom: 1px solid var(--border-dim);
+  flex-shrink: 0;
+}
+
+.dep-list-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.dep-list-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#left-dep-search {
+  width: 90px;
+  padding: 2px 7px;
+  font-size: 11px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  outline: none;
+  flex-shrink: 0;
+}
+#left-dep-search:focus { border-color: var(--accent); }
+
+.dep-list-inline {
+  overflow-y: auto;
+  flex: 1;
+}
+.dep-list-inline::-webkit-scrollbar { width: 4px; }
+.dep-list-inline::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Deployment list items ───────────────────────────────────────────────── */
+.dep-item {
+  display: flex;
+  align-items: center;
+  padding: 5px 10px;
+  gap: 7px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-dim);
+  transition: background 0.1s;
+}
+.dep-item:last-child { border-bottom: none; }
+.dep-item:hover { background: var(--bg-hover); }
+.dep-item.dep-active { background: color-mix(in srgb, var(--accent-dim) 50%, transparent); }
+
+.dep-name {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dep-b-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 9.5px;
+  font-weight: 600;
+}
+.dep-b-ok      { background: var(--same-bg);    color: var(--same-text);    border: 1px solid var(--same-border); }
+.dep-b-missing { background: var(--missing-bg); color: var(--missing-text); border: 1px solid var(--missing-border); }
+
+.dep-arrow {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.dep-item:hover .dep-arrow { opacity: 1; }
+
+.dep-list-empty-msg {
+  padding: 12px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
 
 /* ── Filter bar ──────────────────────────────────────────────────────────── */
 .filter-bar {
@@ -391,11 +535,11 @@ select option { background: var(--bg-surface2); }
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.source-direct  { background: #1a2a1a; color: #4ade80; border: 1px solid #16a34a; }
+.source-direct    { background: #1a2a1a; color: #4ade80; border: 1px solid #16a34a; }
 .source-configmap { background: #1a1f2e; color: #60a5fa; border: 1px solid #2563eb; }
-.source-secret  { background: #2a1a2a; color: #e879f9; border: 1px solid #9333ea; }
-.source-fieldref { background: #2a2a1a; color: #fbbf24; border: 1px solid #d97706; }
-.source-missing { background: #2a1a0e; color: #fb923c; border: 1px solid #ea580c; }
+.source-secret    { background: #2a1a2a; color: #e879f9; border: 1px solid #9333ea; }
+.source-fieldref  { background: #2a2a1a; color: #fbbf24; border: 1px solid #d97706; }
+.source-missing   { background: #2a1a0e; color: #fb923c; border: 1px solid #ea580c; }
 
 .cell-value {
   font-family: var(--font-mono);
@@ -419,8 +563,6 @@ tr.row-diff:hover { background: color-mix(in srgb, var(--diff-bg) 80%, transpare
 
 tr.row-same td.col-a .cell-value,
 tr.row-same td.col-b .cell-value { color: var(--same-text); }
-
-tr.row-missing td { }
 
 /* Status pills */
 .status-pill {
@@ -461,6 +603,3 @@ tr.row-missing td { }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .loading-overlay p { color: var(--text-dim); font-size: 13px; }
-
-/* ── Hidden helper ───────────────────────────────────────────────────────── */
-.hidden { display: none !important; }
