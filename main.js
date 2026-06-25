@@ -34,7 +34,7 @@ if (process.platform === 'darwin' && app.isPackaged) {
 
 let mainWindow;
 
-const ICON_PATH = path.join(__dirname, 'build', 'icon.icns');
+const ICON_PATH = path.join(__dirname, 'build', 'icon.png');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
