@@ -1,4 +1,4 @@
-// Patches the local Electron binary's Info.plist so the app shows "Diff App"
+// Patches the local Electron binary's Info.plist so the app shows "Diff-App"
 // instead of "Electron" in the macOS dock and Activity Monitor during dev.
 // Runs automatically before npm start / npm run dev.
 // node_modules is not committed, so this re-applies after every npm install.
@@ -16,7 +16,7 @@ if (!fs.existsSync(plist)) {
   process.exit(0);
 }
 
-const APP_NAME = 'Diff App';
+const APP_NAME = 'Diff-App';
 const buddy = '/usr/libexec/PlistBuddy';
 
 try {

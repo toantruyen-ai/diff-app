@@ -2,7 +2,7 @@
 set -e
 
 REPO="toantruyen-ai/diff-app"
-APP_NAME="Diff App"
+APP_NAME="Diff-App"
 APP_DIR="/Applications/${APP_NAME}.app"
 
 # Detect architecture

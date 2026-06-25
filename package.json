@@ -1,6 +1,6 @@
 {
   "name": "k8s-env-diff",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Compare Kubernetes application environment variables across clusters",
   "author": "Toan Truyen",
   "main": "main.js",
@@ -27,7 +27,7 @@
   },
   "build": {
     "appId": "com.devops.diff-app",
-    "productName": "Diff App",
+    "productName": "Diff-App",
     "publish": {
       "provider": "github",
       "owner": "toantruyen-ai",

@@ -62,7 +62,7 @@ jobs:
           git push origin "$V_TAG" || true
           # Create release and upload all dist artifacts in one command
           gh release create "$V_TAG" \
-            --title "Diff App ${{ steps.ver.outputs.version }}" \
+            --title "Diff-App ${{ steps.ver.outputs.version }}" \
             --notes "Release ${{ steps.ver.outputs.version }}" \
             dist/*.dmg \
             dist/*.zip \

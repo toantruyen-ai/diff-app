@@ -7,7 +7,7 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 const os = require('os');
 
-app.setName('Diff App');
+app.setName('Diff-App');
 
 // ── Auto-updater (packaged app only) ──────────────────────────────────────────
 let autoUpdater = null;
@@ -82,7 +82,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     // Check for updates 5 s after window is visible to not block startup
-    if (autoUpdater) setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 5000);
+    if (autoUpdater) setTimeout(() => autoUpdater.checkForUpdates().catch(() => { }), 5000);
   });
 }
 
