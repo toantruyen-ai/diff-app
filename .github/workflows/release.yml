@@ -10,7 +10,7 @@ jobs:
   build-mac:
     runs-on: macos-latest
     permissions:
-      contents: write   # needed to create GitHub Releases
+      contents: write
 
     steps:
       - name: Checkout
@@ -39,27 +39,33 @@ jobs:
             --no-git-tag-version \
             --allow-same-version
 
-      - name: Ensure v-prefixed tag exists for electron-builder
-        run: |
-          V_TAG="v${{ steps.ver.outputs.version }}"
-          CURRENT_TAG="${{ steps.ver.outputs.tag }}"
-          if [ "$CURRENT_TAG" != "$V_TAG" ]; then
-            git tag "$V_TAG" || true
-            git push origin "$V_TAG" || true
-          fi
+      - name: Build macOS (x64 + arm64)
+        run: npx electron-builder --mac --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: List build artifacts
+        run: ls -lh dist/
 
       - name: Delete existing release if present
         run: |
-          gh release delete "v${{ steps.ver.outputs.version }}" --yes || true
-          gh release delete "${{ steps.ver.outputs.tag }}" --yes || true
+          gh release delete "v${{ steps.ver.outputs.version }}" --yes --cleanup-tag || true
+          gh release delete "${{ steps.ver.outputs.tag }}"      --yes --cleanup-tag || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build macOS (x64 + arm64)
-        run: npx electron-builder --mac --publish always
+      - name: Create GitHub Release and upload artifacts
+        run: |
+          V_TAG="v${{ steps.ver.outputs.version }}"
+          # Ensure the v-prefixed tag exists
+          git tag "$V_TAG" || true
+          git push origin "$V_TAG" || true
+          # Create release and upload all dist artifacts in one command
+          gh release create "$V_TAG" \
+            --title "Diff App ${{ steps.ver.outputs.version }}" \
+            --notes "Release ${{ steps.ver.outputs.version }}" \
+            dist/*.dmg \
+            dist/*.zip \
+            dist/*.blockmap
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: false
