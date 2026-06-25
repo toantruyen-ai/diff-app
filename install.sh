@@ -25,7 +25,7 @@ fi
 echo "Latest version: $LATEST_TAG"
 
 # Build download URL
-DMG_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${APP_NAME// /.}-${LATEST_TAG#v}-mac-${DMG_SUFFIX}"
+DMG_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${APP_NAME// /.}-${LATEST_TAG#v}-${DMG_SUFFIX}"
 DMG_FILE="/tmp/${APP_NAME// /-}-${LATEST_TAG}.dmg"
 
 echo "Downloading: $DMG_URL"
