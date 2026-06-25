@@ -5,7 +5,7 @@
   "main": "main.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/OWNER/REPO.git"
+    "url": "https://github.com/toantruyen-ai/diff-app.git"
   },
   "scripts": {
     "prestart": "node scripts/patch-electron-name.js",
