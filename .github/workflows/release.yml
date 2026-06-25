@@ -66,6 +66,7 @@ jobs:
             --notes "Release ${{ steps.ver.outputs.version }}" \
             dist/*.dmg \
             dist/*.zip \
-            dist/*.blockmap
+            dist/*.blockmap \
+            dist/latest-mac.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
