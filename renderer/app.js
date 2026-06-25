@@ -43,6 +43,10 @@ const el = {
     contextField:    $('right-context-field'),
     btnUseFile:      $('right-btn-use-file'),
   },
+  updateBanner:        $('update-banner'),
+  updateBannerText:    $('update-banner-text'),
+  btnInstallUpdate:    $('btn-install-update'),
+  btnDismissUpdate:    $('btn-dismiss-update'),
   btnCompare:          $('btn-compare'),
   btnClear:            $('btn-clear'),
   btnBackHome:         $('btn-back-home'),
@@ -1250,6 +1254,24 @@ el.btnAzLogin.addEventListener('click', async () => {
   showView('home');
   startTokenCountdown();
 });
+
+/* ── Auto-update ─────────────────────────────────────────────────────────── */
+if (window.k8sApi.onUpdateAvailable) {
+  window.k8sApi.onUpdateAvailable((version) => {
+    el.updateBannerText.textContent = `Update v${version} is downloading…`;
+    el.btnInstallUpdate.style.display = 'none';
+    el.updateBanner.style.display = 'flex';
+  });
+
+  window.k8sApi.onUpdateDownloaded((version) => {
+    el.updateBannerText.textContent = `v${version} is ready to install`;
+    el.btnInstallUpdate.style.display = '';
+    el.updateBanner.style.display = 'flex';
+  });
+
+  el.btnInstallUpdate.addEventListener('click', () => window.k8sApi.installUpdate());
+  el.btnDismissUpdate.addEventListener('click', () => { el.updateBanner.style.display = 'none'; });
+}
 
 /* ── Init ────────────────────────────────────────────────────────────────── */
 checkAuth().then((ok) => {

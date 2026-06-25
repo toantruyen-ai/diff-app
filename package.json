@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "Compare Kubernetes application environment variables across clusters",
   "main": "main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/REPO.git"
+  },
   "scripts": {
     "prestart": "node scripts/patch-electron-name.js",
     "start": "electron .",
@@ -13,7 +17,8 @@
     "build:all": "electron-builder --mac --linux"
   },
   "dependencies": {
-    "@kubernetes/client-node": "^0.21.0"
+    "@kubernetes/client-node": "^0.21.0",
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
     "electron": "^28.0.0",
@@ -22,7 +27,10 @@
   "build": {
     "appId": "com.devops.diff-app",
     "productName": "Diff App",
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
+    },
     "icon": "build/icon",
     "files": [
       "main.js",
@@ -35,21 +43,48 @@
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "linux": {
       "category": "Development",
       "target": [
-        { "target": "AppImage", "arch": ["x64"] },
-        { "target": "deb",      "arch": ["x64"] }
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "dmg": {
       "title": "${productName} ${version}"
     },
     "deb": {
-      "depends": ["libnotify4", "libxtst6", "libnss3"]
+      "depends": [
+        "libnotify4",
+        "libxtst6",
+        "libnss3"
+      ]
     }
   }
 }

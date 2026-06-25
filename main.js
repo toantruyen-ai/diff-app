@@ -9,6 +9,31 @@ const os = require('os');
 
 app.setName('Diff App');
 
+// ── Auto-updater (packaged app only) ──────────────────────────────────────────
+let autoUpdater = null;
+if (app.isPackaged) {
+  try {
+    autoUpdater = require('electron-updater').autoUpdater;
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.logger = null;
+
+    autoUpdater.on('update-available', (info) => {
+      if (mainWindow) mainWindow.webContents.send('update-available', info.version);
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      if (mainWindow) mainWindow.webContents.send('update-downloaded', info.version);
+    });
+
+    autoUpdater.on('error', (err) => {
+      if (mainWindow) mainWindow.webContents.send('update-error', err.message);
+    });
+  } catch {
+    autoUpdater = null;
+  }
+}
+
 // When launched as a packaged .app on macOS, the process inherits a bare PATH
 // (/usr/bin:/bin:/usr/sbin:/sbin) — kubelogin/kubectl plugins are not found.
 // Spawn a login shell once to read the user's real PATH and inject it.
@@ -54,7 +79,11 @@ function createWindow() {
   });
 
   mainWindow.loadFile('renderer/index.html');
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    // Check for updates 5 s after window is visible to not block startup
+    if (autoUpdater) setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 5000);
+  });
 }
 
 app.whenReady().then(() => {
@@ -78,6 +107,10 @@ const aksKcStore = new Map();
 let aksKcIdSeq = 0;
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
+
+ipcMain.handle('install-update', () => {
+  if (autoUpdater) autoUpdater.quitAndInstall();
+});
 
 ipcMain.handle('select-kubeconfig', async () => {
   const { filePaths } = await dialog.showOpenDialog(mainWindow, {
