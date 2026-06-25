@@ -17,8 +17,6 @@ contextBridge.exposeInMainWorld('k8sApi', {
   checkKubeloginAuth: () => ipcRenderer.invoke('check-kubelogin-auth'),
   azLogin: () => ipcRenderer.invoke('az-login'),
   kubeloginRefresh: () => ipcRenderer.invoke('kubelogin-refresh'),
-  installUpdate: () => ipcRenderer.invoke('install-update'),
+  triggerUpdate: () => ipcRenderer.invoke('trigger-update'),
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_e, v) => cb(v)),
-  onUpdateDownloaded: (cb) => ipcRenderer.on('update-downloaded', (_e, v) => cb(v)),
-  onUpdateError: (cb) => ipcRenderer.on('update-error', (_e, msg) => cb(msg)),
 });

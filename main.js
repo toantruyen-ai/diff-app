@@ -14,20 +14,12 @@ let autoUpdater = null;
 if (app.isPackaged) {
   try {
     autoUpdater = require('electron-updater').autoUpdater;
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.logger = console;
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
+    autoUpdater.logger = null;
 
     autoUpdater.on('update-available', (info) => {
       if (mainWindow) mainWindow.webContents.send('update-available', info.version);
-    });
-
-    autoUpdater.on('update-downloaded', (info) => {
-      if (mainWindow) mainWindow.webContents.send('update-downloaded', info.version);
-    });
-
-    autoUpdater.on('error', (err) => {
-      if (mainWindow) mainWindow.webContents.send('update-error', err.message);
     });
   } catch {
     autoUpdater = null;
@@ -108,8 +100,9 @@ let aksKcIdSeq = 0;
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 
-ipcMain.handle('install-update', () => {
-  if (autoUpdater) autoUpdater.quitAndInstall();
+ipcMain.handle('trigger-update', () => {
+  const cmd = `curl -fsSL https://raw.githubusercontent.com/toantruyen-ai/diff-app/refs/heads/main/install.sh | bash`;
+  exec(`osascript -e 'tell application "Terminal" to activate' -e 'tell application "Terminal" to do script "${cmd}"'`);
 });
 
 ipcMain.handle('select-kubeconfig', async () => {

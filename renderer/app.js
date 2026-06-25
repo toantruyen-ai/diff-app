@@ -1258,23 +1258,11 @@ el.btnAzLogin.addEventListener('click', async () => {
 /* ── Auto-update ─────────────────────────────────────────────────────────── */
 if (window.k8sApi.onUpdateAvailable) {
   window.k8sApi.onUpdateAvailable((version) => {
-    el.updateBannerText.textContent = `Update v${version} is downloading…`;
-    el.btnInstallUpdate.style.display = 'none';
+    el.updateBannerText.textContent = `v${version} is available`;
     el.updateBanner.style.display = 'flex';
   });
 
-  window.k8sApi.onUpdateDownloaded((version) => {
-    el.updateBannerText.textContent = `v${version} is ready to install`;
-    el.btnInstallUpdate.style.display = '';
-    el.updateBanner.style.display = 'flex';
-  });
-
-  window.k8sApi.onUpdateError((msg) => {
-    el.updateBannerText.textContent = `Update failed: ${msg}`;
-    el.btnInstallUpdate.style.display = 'none';
-  });
-
-  el.btnInstallUpdate.addEventListener('click', () => window.k8sApi.installUpdate());
+  el.btnInstallUpdate.addEventListener('click', () => window.k8sApi.triggerUpdate());
   el.btnDismissUpdate.addEventListener('click', () => { el.updateBanner.style.display = 'none'; });
 }
 
