@@ -39,6 +39,11 @@ jobs:
             --no-git-tag-version \
             --allow-same-version
 
+      - name: Delete existing release if present
+        run: gh release delete "${{ steps.ver.outputs.tag }}" --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build macOS (x64 + arm64)
         run: npx electron-builder --mac --publish always
         env:
