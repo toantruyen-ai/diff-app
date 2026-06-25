@@ -39,8 +39,21 @@ jobs:
             --no-git-tag-version \
             --allow-same-version
 
+      - name: Ensure v-prefixed tag exists for electron-builder
+        run: |
+          V_TAG="v${{ steps.ver.outputs.version }}"
+          CURRENT_TAG="${{ steps.ver.outputs.tag }}"
+          if [ "$CURRENT_TAG" != "$V_TAG" ]; then
+            git tag "$V_TAG" || true
+            git push origin "$V_TAG" || true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Delete existing release if present
-        run: gh release delete "${{ steps.ver.outputs.tag }}" --yes || true
+        run: |
+          gh release delete "v${{ steps.ver.outputs.version }}" --yes || true
+          gh release delete "${{ steps.ver.outputs.tag }}" --yes || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
