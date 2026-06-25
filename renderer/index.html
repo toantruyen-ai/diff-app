@@ -10,8 +10,7 @@
   <div id="app">
     <!-- Title bar -->
     <header class="titlebar">
-      <span class="titlebar-icon">⎈</span>
-      <h1 class="titlebar-title">K8s ENV Diff</h1>
+      <img class="titlebar-logo" src="../logo.png" alt="K8s ENV Diff" />
       <div class="titlebar-actions">
         <button id="btn-compare" class="btn btn-primary" disabled>Compare</button>
         <button id="btn-clear" class="btn btn-ghost">Clear</button>
@@ -148,7 +147,7 @@
     <!-- Comparison table -->
     <div class="table-wrapper" id="table-wrapper">
       <div class="empty-state" id="empty-state">
-        <div class="empty-icon">⎈</div>
+        <div class="empty-icon"><img src="../logo.png" alt="" /></div>
         <p>Select deployments from both sides and click <strong>Compare</strong></p>
       </div>
       <table class="diff-table" id="diff-table" style="display:none">

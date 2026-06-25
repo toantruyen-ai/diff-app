@@ -20,14 +20,18 @@
   "build": {
     "appId": "com.devops.k8s-env-diff",
     "productName": "K8s ENV Diff",
+    "publish": null,
+    "icon": "build/icon",
     "files": [
       "main.js",
       "preload.js",
+      "logo.png",
       "renderer/**/*",
       "node_modules/**/*"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
       "target": [
         { "target": "dmg", "arch": ["x64", "arm64"] }
       ]

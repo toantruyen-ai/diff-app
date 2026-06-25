@@ -70,14 +70,13 @@ body {
   flex-shrink: 0;
 }
 
-.titlebar-icon { font-size: 20px; -webkit-app-region: no-drag; }
-
-.titlebar-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  letter-spacing: 0.02em;
+.titlebar-logo {
+  height: 28px;
+  width: auto;
   flex: 1;
+  object-fit: contain;
+  object-position: left center;
+  -webkit-app-region: no-drag;
 }
 
 .titlebar-actions {
@@ -464,7 +463,7 @@ select option { background: var(--bg-surface2); }
   gap: 12px;
   color: var(--text-muted);
 }
-.empty-icon { font-size: 48px; opacity: 0.3; }
+.empty-icon img { height: 56px; width: auto; opacity: 0.25; }
 .empty-state p { font-size: 13px; }
 .empty-state strong { color: var(--text-dim); }
 

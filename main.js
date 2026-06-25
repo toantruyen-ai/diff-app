@@ -3,6 +3,31 @@ const path = require('path');
 const k8s = require('@kubernetes/client-node');
 const fs = require('fs');
 
+// When launched as a packaged .app on macOS, the process inherits a bare PATH
+// (/usr/bin:/bin:/usr/sbin:/sbin) — kubelogin/kubectl plugins are not found.
+// Spawn a login shell once to read the user's real PATH and inject it.
+if (process.platform === 'darwin' && app.isPackaged) {
+  const { execSync } = require('child_process');
+  const os = require('os');
+  try {
+    const shell = process.env.SHELL || '/bin/zsh';
+    const shellPath = execSync(`${shell} -l -c 'echo $PATH'`, {
+      encoding: 'utf8',
+      timeout: 3000,
+    }).trim();
+    if (shellPath) process.env.PATH = shellPath;
+  } catch {
+    // Fallback: prepend common kubelogin install locations
+    const home = os.homedir();
+    process.env.PATH = [
+      `${home}/.krew/bin`,
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      process.env.PATH,
+    ].join(':');
+  }
+}
+
 let mainWindow;
 
 function createWindow() {
