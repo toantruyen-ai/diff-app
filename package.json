@@ -2,7 +2,10 @@
   "name": "k8s-env-diff",
   "version": "1.0.10",
   "description": "Compare Kubernetes application environment variables across clusters",
-  "author": "Toan Truyen",
+  "author": {
+    "name": "Toan Truyen",
+    "email": "truyenminhtoan@gmail.com"
+  },
   "main": "main.js",
   "repository": {
     "type": "git",
