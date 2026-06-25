@@ -39,6 +39,7 @@
       "main.js",
       "preload.js",
       "logo.png",
+      "build/icon.png",
       "renderer/**/*",
       "node_modules/**/*"
     ],

@@ -78,7 +78,7 @@ function createWindow() {
     show: false,
   });
 
-  mainWindow.loadFile('renderer/index.html');
+  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     // Check for updates 5 s after window is visible to not block startup
@@ -88,7 +88,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) {
-    app.dock.setIcon(ICON_PATH);
+    try { app.dock.setIcon(ICON_PATH); } catch { /* icon missing — non-fatal */ }
   }
   createWindow();
   app.on('activate', () => {
