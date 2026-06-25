@@ -14,10 +14,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.4.0
         with:
           node-version: '24'
           cache: 'npm'
@@ -30,15 +30,18 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
-          echo "tag=$TAG"     >> $GITHUB_OUTPUT
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG"          >> $GITHUB_OUTPUT
+          echo "version=$VERSION"  >> $GITHUB_OUTPUT
 
       - name: Stamp version into package.json
-        run: npm version ${{ steps.ver.outputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          npm version "${{ steps.ver.outputs.version }}" \
+            --no-git-tag-version \
+            --allow-same-version
 
       - name: Build macOS (x64 + arm64)
         run: npx electron-builder --mac --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Skip code-signing — remove these lines if you have a Developer ID cert
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          CSC_LINK: ""
