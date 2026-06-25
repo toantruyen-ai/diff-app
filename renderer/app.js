@@ -54,17 +54,28 @@ const el = {
   btnCompareClusters:     $('btn-compare-clusters'),
   k8sDiffView:            $('k8s-diff-view'),
   cardK8sDiff:            $('card-k8s-diff'),
-  cardStorageDiff:        $('card-storage-diff'),
-  storageSelectView:      $('storage-select-view'),
-  storageAccountList:     $('storage-account-list'),
-  saCount:                $('sa-count'),
-  btnCompareStorage:      $('btn-compare-storage'),
-  storageDiffResultView:  $('storage-diff-result-view'),
-  sdrHead:                $('sdr-head'),
-  sdrBody:                $('sdr-body'),
-  sdrStats:               $('sdr-stats'),
-  sdrSearch:              $('sdr-search'),
-  sdrFilterBtns:          document.querySelectorAll('[data-sdr-filter]'),
+  cardStorageDiff:           $('card-storage-diff'),
+  storageSelectView:         $('storage-select-view'),
+  storageAccountList:        $('storage-account-list'),
+  saCount:                   $('sa-count'),
+  btnCompareStorage:         $('btn-compare-storage'),
+  storageDiffResultView:     $('storage-diff-result-view'),
+  sdrHead:                   $('sdr-head'),
+  sdrBody:                   $('sdr-body'),
+  sdrStats:                  $('sdr-stats'),
+  sdrSearch:                 $('sdr-search'),
+  sdrFilterBtns:             document.querySelectorAll('[data-sdr-filter]'),
+  cardServiceBusDiff:        $('card-servicebus-diff'),
+  servicebusSelectView:      $('servicebus-select-view'),
+  servicebusNamespaceList:   $('servicebus-namespace-list'),
+  sbCount:                   $('sb-count'),
+  btnCompareServiceBus:      $('btn-compare-servicebus'),
+  servicebusResultView:      $('servicebus-diff-result-view'),
+  sbdrHead:                  $('sbdr-head'),
+  sbdrBody:                  $('sbdr-body'),
+  sbdrStats:                 $('sbdr-stats'),
+  sbdrSearch:                $('sbdr-search'),
+  sbdrFilterBtns:            document.querySelectorAll('[data-sbdr-filter]'),
   tokenExpiry:         $('token-expiry'),
   tokenCountdown:      $('token-countdown'),
   authOverlay:         $('auth-overlay'),
@@ -524,20 +535,24 @@ function escHtml(str) {
 let panelsInitialized = false;
 
 const BACK_TARGETS = {
-  'cluster-select':      'home',
-  'k8s-diff':            'cluster-select',
-  'storage-select':      'home',
-  'storage-diff-result': 'storage-select',
+  'cluster-select':          'home',
+  'k8s-diff':                'cluster-select',
+  'storage-select':          'home',
+  'storage-diff-result':     'storage-select',
+  'servicebus-select':       'home',
+  'servicebus-diff-result':  'servicebus-select',
 };
 
 function showView(view) {
-  el.homeView.style.display              = view === 'home'                ? 'flex' : 'none';
-  el.clusterSelectView.style.display     = view === 'cluster-select'      ? 'flex' : 'none';
-  el.k8sDiffView.style.display           = view === 'k8s-diff'            ? 'flex' : 'none';
-  el.storageSelectView.style.display     = view === 'storage-select'      ? 'flex' : 'none';
-  el.storageDiffResultView.style.display = view === 'storage-diff-result' ? 'flex' : 'none';
-  el.btnBackHome.style.display           = view !== 'home'                ? ''     : 'none';
-  el.titlebarActions.style.display       = view === 'k8s-diff'            ? ''     : 'none';
+  el.homeView.style.display              = view === 'home'                   ? 'flex' : 'none';
+  el.clusterSelectView.style.display     = view === 'cluster-select'         ? 'flex' : 'none';
+  el.k8sDiffView.style.display           = view === 'k8s-diff'               ? 'flex' : 'none';
+  el.storageSelectView.style.display     = view === 'storage-select'         ? 'flex' : 'none';
+  el.storageDiffResultView.style.display = view === 'storage-diff-result'    ? 'flex' : 'none';
+  el.servicebusSelectView.style.display  = view === 'servicebus-select'      ? 'flex' : 'none';
+  el.servicebusResultView.style.display  = view === 'servicebus-diff-result' ? 'flex' : 'none';
+  el.btnBackHome.style.display           = view !== 'home'                   ? ''     : 'none';
+  el.titlebarActions.style.display       = view === 'k8s-diff'               ? ''     : 'none';
   el.btnBackHome.dataset.target          = BACK_TARGETS[view] || 'home';
 }
 
@@ -923,6 +938,199 @@ function renderStorageDiffTable(results) {
   sdrSearch = '';
   el.sdrSearch.value = '';
   el.sdrFilterBtns.forEach((b) => b.classList.toggle('active', b.dataset.sdrFilter === 'all'));
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   SERVICEBUS DIFF
+   ════════════════════════════════════════════════════════════════════════════ */
+let selectedNamespaces = [];
+
+el.cardServiceBusDiff.addEventListener('click', () => {
+  showView('servicebus-select');
+  loadServiceBusNamespaceList();
+});
+
+async function loadServiceBusNamespaceList() {
+  selectedNamespaces = [];
+  el.servicebusNamespaceList.innerHTML = '<div class="cs-loading">Loading Service Bus namespaces…</div>';
+  el.sbCount.textContent = '0 selected';
+  el.btnCompareServiceBus.disabled = true;
+
+  showLoading('Fetching Service Bus namespaces…');
+  const result = await window.k8sApi.listServiceBusNamespaces();
+  hideLoading();
+
+  if (!result.ok) {
+    el.servicebusNamespaceList.innerHTML = `<div class="cs-error">Failed to load namespaces:<br>${escHtml(result.error)}</div>`;
+    return;
+  }
+  if (result.namespaces.length === 0) {
+    el.servicebusNamespaceList.innerHTML = '<div class="cs-empty">No Service Bus namespaces found with tag <code>diff=true</code></div>';
+    return;
+  }
+  renderServiceBusNamespaceList(result.namespaces);
+}
+
+function renderServiceBusNamespaceList(namespaces) {
+  el.servicebusNamespaceList.innerHTML = '';
+  for (const ns of namespaces) {
+    const item = document.createElement('div');
+    item.className = 'cluster-item';
+    item.dataset.name = ns.name;
+    const envHtml = ns.environment
+      ? `<span class="ci-env-tag ${envTagClass(ns.environment)}">${escHtml(ns.environment)}</span>`
+      : `<span class="ci-env-tag env-unknown">—</span>`;
+    item.innerHTML = `
+      <div class="ci-check"></div>
+      <div class="ci-body">
+        <div class="ci-name-row">${envHtml}<span class="ci-name">${escHtml(ns.name)}</span></div>
+        <div class="ci-meta">${escHtml(ns.resourceGroup)} &middot; ${escHtml(ns.location)}</div>
+      </div>
+    `;
+    item.addEventListener('click', () => toggleServiceBusNamespace(item, ns));
+    el.servicebusNamespaceList.appendChild(item);
+  }
+}
+
+function toggleServiceBusNamespace(item, ns) {
+  const idx = selectedNamespaces.findIndex((n) => n.name === ns.name);
+  if (idx >= 0) {
+    selectedNamespaces.splice(idx, 1);
+    item.classList.remove('ci-selected-a', 'ci-selected-b');
+  } else {
+    selectedNamespaces.push(ns);
+    item.classList.add(selectedNamespaces.length === 1 ? 'ci-selected-a' : 'ci-selected-b');
+  }
+  refreshServiceBusSelectionUI();
+}
+
+function refreshServiceBusSelectionUI() {
+  el.servicebusNamespaceList.querySelectorAll('.cluster-item').forEach((item) => {
+    const idx = selectedNamespaces.findIndex((n) => n.name === item.dataset.name);
+    item.classList.remove('ci-selected-a', 'ci-selected-b');
+    if (idx >= 0) item.classList.add(idx === 0 ? 'ci-selected-a' : 'ci-selected-b');
+  });
+  const n = selectedNamespaces.length;
+  el.sbCount.textContent = n === 0 ? '0 selected' : `${n} selected`;
+  el.btnCompareServiceBus.disabled = n < 2;
+}
+
+el.btnCompareServiceBus.addEventListener('click', async () => {
+  if (selectedNamespaces.length < 2) return;
+  el.btnCompareServiceBus.disabled = true;
+
+  try {
+    showLoading(`Listing queues for ${selectedNamespaces.length} namespaces…`);
+    const results = await window.k8sApi.listServiceBusQueues(selectedNamespaces);
+    hideLoading();
+    renderServiceBusDiffTable(results);
+    showView('servicebus-diff-result');
+  } catch (e) {
+    hideLoading();
+    alert(`Failed to list queues: ${e.message}`);
+    el.btnCompareServiceBus.disabled = false;
+  }
+});
+
+// ── ServiceBus diff table ─────────────────────────────────────────────────────
+let sbdrFilter = 'all';
+let sbdrSearch = '';
+
+el.sbdrFilterBtns.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    el.sbdrFilterBtns.forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    sbdrFilter = btn.dataset.sbdrFilter;
+    applySbdrFilter();
+  });
+});
+
+el.sbdrSearch.addEventListener('input', () => {
+  sbdrSearch = el.sbdrSearch.value.toLowerCase();
+  applySbdrFilter();
+});
+
+function applySbdrFilter() {
+  el.sbdrBody.querySelectorAll('tr').forEach((row) => {
+    const matchFilter = sbdrFilter === 'all' || row.dataset.status === sbdrFilter;
+    const matchSearch = !sbdrSearch || row.dataset.queue.includes(sbdrSearch);
+    row.style.display = matchFilter && matchSearch ? '' : 'none';
+  });
+}
+
+function renderServiceBusDiffTable(results) {
+  // Build unique queue set
+  const allQueues = new Set();
+  for (const r of results) {
+    for (const q of r.queues) allQueues.add(q);
+  }
+  const sorted = Array.from(allQueues).sort();
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  el.sbdrHead.innerHTML = '';
+  const hRow = document.createElement('tr');
+  let hHtml = '<th class="sdr-col-container">Queue</th>';
+  for (const r of results) {
+    const envHtml = r.environment
+      ? `<span class="ci-env-tag ${envTagClass(r.environment)} env-inline">${escHtml(r.environment)}</span>`
+      : '';
+    const errHtml = r.ok ? '' : `<div class="sdr-account-error" title="${escHtml(r.error)}">⚠ error</div>`;
+    hHtml += `
+      <th class="sdr-col-account">
+        <div class="sdr-th-account">
+          ${envHtml}
+          <span class="sdr-th-name">${escHtml(r.name)}</span>
+          ${errHtml}
+        </div>
+      </th>`;
+  }
+  hHtml += '<th class="sdr-col-status">Status</th>';
+  hRow.innerHTML = hHtml;
+  el.sbdrHead.appendChild(hRow);
+
+  // ── Body ──────────────────────────────────────────────────────────────────
+  el.sbdrBody.innerHTML = '';
+  let totalComplete = 0, totalPartial = 0;
+
+  for (const queue of sorted) {
+    const presence = results.map((r) => r.queues.includes(queue));
+    const allHave = presence.every(Boolean);
+    const status = allHave ? 'complete' : 'partial';
+    if (allHave) totalComplete++; else totalPartial++;
+
+    const row = document.createElement('tr');
+    row.className = `sdr-row-${status}`;
+    row.dataset.status = status;
+    row.dataset.queue = queue.toLowerCase();
+
+    let cells = `<td class="sdr-cell-name">${escHtml(queue)}</td>`;
+    results.forEach((r, i) => {
+      if (!r.ok) {
+        cells += `<td class="sdr-cell-check sdr-unknown" title="${escHtml(r.error)}">?</td>`;
+      } else {
+        cells += `<td class="sdr-cell-check">${presence[i]
+          ? '<span class="sdr-present">✓</span>'
+          : '<span class="sdr-missing">✗</span>'
+        }</td>`;
+      }
+    });
+    cells += `<td class="sdr-col-status">
+      <span class="sdr-pill sdr-pill-${status}">${allHave ? 'ALL' : 'PARTIAL'}</span>
+    </td>`;
+    row.innerHTML = cells;
+    el.sbdrBody.appendChild(row);
+  }
+
+  const total = sorted.length;
+  el.sbdrStats.textContent = total === 0
+    ? 'No queues found'
+    : `${total} queues · ${totalPartial} missing in some · ${totalComplete} in all`;
+
+  // Reset filters
+  sbdrFilter = 'all';
+  sbdrSearch = '';
+  el.sbdrSearch.value = '';
+  el.sbdrFilterBtns.forEach((b) => b.classList.toggle('active', b.dataset.sbdrFilter === 'all'));
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

@@ -375,6 +375,54 @@ ipcMain.handle('list-storage-containers', async (_e, accounts) => {
   return results;
 });
 
+ipcMain.handle('list-servicebus-namespaces', async () => {
+  try {
+    const output = execSync(
+      'az servicebus namespace list --query "[?tags.diff==\'true\']" --output json',
+      { encoding: 'utf8', timeout: 30000, stdio: 'pipe' }
+    );
+    const namespaces = JSON.parse(output);
+    return {
+      ok: true,
+      namespaces: namespaces.map((n) => ({
+        name: n.name,
+        resourceGroup: n.resourceGroup,
+        location: n.location,
+        environment: (n.tags && n.tags.environment) ? n.tags.environment : '',
+      })),
+    };
+  } catch (e) {
+    return { ok: false, error: String(e.stderr || e.message) };
+  }
+});
+
+ipcMain.handle('list-servicebus-queues', async (_e, namespaces) => {
+  const results = await Promise.all(namespaces.map(async (ns) => {
+    try {
+      const { stdout } = await execAsync(
+        `az servicebus queue list --namespace-name "${ns.name}" --resource-group "${ns.resourceGroup}" --output json`,
+        { timeout: 60000 }
+      );
+      const queues = JSON.parse(stdout.trim() || '[]');
+      return {
+        name: ns.name,
+        environment: ns.environment || '',
+        queues: queues.map((q) => q.name),
+        ok: true,
+      };
+    } catch (e) {
+      return {
+        name: ns.name,
+        environment: ns.environment || '',
+        queues: [],
+        ok: false,
+        error: String(e.stderr || e.message).split('\n')[0],
+      };
+    }
+  }));
+  return results;
+});
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function isKubeconfigContent(str) {

@@ -62,6 +62,19 @@
           <div class="tool-card-desc">Compare containers across Azure Storage Accounts and find missing ones between environments</div>
         </button>
 
+        <button class="tool-card" id="card-servicebus-diff">
+          <div class="tool-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="17 1 21 5 17 9"/>
+              <path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+              <polyline points="7 23 3 19 7 15"/>
+              <path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+            </svg>
+          </div>
+          <div class="tool-card-title">ServiceBus Diff</div>
+          <div class="tool-card-desc">Compare queues across Azure Service Bus namespaces and find missing ones between environments</div>
+        </button>
+
       </div>
     </div>
 
@@ -263,6 +276,49 @@
       </div>
 
     </div><!-- /#k8s-diff-view -->
+
+    <!-- ── ServiceBus namespace selection view ──────────────────────────── -->
+    <div id="servicebus-select-view" class="cluster-select-view" style="display:none">
+      <div class="cs-header">
+        <div class="cs-title">Select Service Bus Namespaces</div>
+        <p class="cs-hint">Choose 2 or more namespaces tagged <code>diff=true</code> to compare queues</p>
+      </div>
+      <div id="servicebus-namespace-list" class="cluster-list"></div>
+      <div class="cs-footer">
+        <span id="sb-count" class="cs-count">0 selected</span>
+        <button id="btn-compare-servicebus" class="btn btn-primary" disabled>
+          Compare
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ── ServiceBus diff result view ───────────────────────────────────── -->
+    <div id="servicebus-diff-result-view" class="storage-diff-result-view" style="display:none">
+      <div class="sdr-toolbar">
+        <div class="sdr-toolbar-left">
+          <div class="filter-toggles">
+            <button class="toggle-btn active" data-sbdr-filter="all">All</button>
+            <button class="toggle-btn" data-sbdr-filter="partial">
+              <span class="dot" style="background:var(--red)"></span> Missing in some
+            </button>
+            <button class="toggle-btn" data-sbdr-filter="complete">
+              <span class="dot" style="background:var(--green)"></span> In all
+            </button>
+          </div>
+          <input type="text" id="sbdr-search" placeholder="Filter queue name…" />
+        </div>
+        <div class="sdr-stats" id="sbdr-stats"></div>
+      </div>
+      <div class="sdr-table-wrap">
+        <table class="sdr-table">
+          <thead id="sbdr-head"></thead>
+          <tbody id="sbdr-body"></tbody>
+        </table>
+      </div>
+    </div>
 
     <!-- ── Storage account selection view ───────────────────────────────── -->
     <div id="storage-select-view" class="cluster-select-view" style="display:none">

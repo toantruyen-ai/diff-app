@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('k8sApi', {
   getAksCredentials: (name, rg) => ipcRenderer.invoke('get-aks-credentials', name, rg),
   listStorageAccounts: () => ipcRenderer.invoke('list-storage-accounts'),
   listStorageContainers: (accounts) => ipcRenderer.invoke('list-storage-containers', accounts),
+  listServiceBusNamespaces: () => ipcRenderer.invoke('list-servicebus-namespaces'),
+  listServiceBusQueues: (namespaces) => ipcRenderer.invoke('list-servicebus-queues', namespaces),
   checkAzureAuth: () => ipcRenderer.invoke('check-azure-auth'),
   checkKubeloginAuth: () => ipcRenderer.invoke('check-kubelogin-auth'),
   azLogin: () => ipcRenderer.invoke('az-login'),
