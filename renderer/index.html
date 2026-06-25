@@ -3,171 +3,321 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>K8s ENV Diff</title>
+  <title>DevOps Diff Tools</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="app">
     <!-- Title bar -->
     <header class="titlebar">
-      <img class="titlebar-logo" src="../logo.png" alt="K8s ENV Diff" />
-      <div class="titlebar-actions">
+      <button id="btn-back-home" class="btn btn-ghost btn-sm" style="display:none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 12H5M12 5l-7 7 7 7"/>
+        </svg>
+        Back
+      </button>
+      <img class="titlebar-logo" src="../logo.png" alt="DevOps Diff Tools" />
+      <div id="token-expiry" class="token-expiry" style="display:none">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <span class="token-expiry-label">Token</span>
+        <span id="token-countdown">--:--</span>
+      </div>
+      <div class="titlebar-actions" id="titlebar-actions" style="display:none">
         <button id="btn-compare" class="btn btn-primary" disabled>Compare</button>
         <button id="btn-clear" class="btn btn-ghost">Clear</button>
       </div>
     </header>
 
-    <!-- Selector panels -->
-    <div class="selectors-row">
+    <!-- ── Home view ──────────────────────────────────────────────────────── -->
+    <div id="home-view" class="home-view" style="display:none">
+      <div class="home-hero">
+        <img class="home-logo" src="../logo.png" alt="DevOps Diff Tools" />
+        <p class="home-subtitle">Select a tool to get started</p>
+      </div>
+      <div class="home-cards">
 
-      <!-- ── Left / A panel ─────────────────────────────────────────────── -->
-      <div class="selector-panel" id="panel-left">
-        <div class="panel-label">
-          <span class="badge badge-left">A</span>
-          <span>Source</span>
-        </div>
+        <button class="tool-card" id="card-k8s-diff">
+          <div class="tool-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+              <path d="M2 17l10 5 10-5"/>
+              <path d="M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+          <div class="tool-card-title">K8s ENV Diff</div>
+          <div class="tool-card-desc">Compare environment variables across Kubernetes deployments between clusters or namespaces</div>
+        </button>
 
-        <div class="selector-grid">
-          <div class="field-group">
-            <label>Kubeconfig</label>
-            <div class="file-input-row">
-              <input type="text" id="left-kubeconfig" placeholder="Default (~/.kube/config)" readonly />
-              <button class="btn btn-sm" id="left-btn-browse">Browse</button>
-              <button class="btn btn-sm btn-ghost" id="left-btn-default" title="Use default kubeconfig">↺</button>
+        <button class="tool-card" id="card-storage-diff">
+          <div class="tool-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <ellipse cx="12" cy="5" rx="9" ry="3"/>
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+          </div>
+          <div class="tool-card-title">Storage Diff</div>
+          <div class="tool-card-desc">Compare containers across Azure Storage Accounts and find missing ones between environments</div>
+        </button>
+
+      </div>
+    </div>
+
+    <!-- ── Cluster selection view ─────────────────────────────────────────── -->
+    <div id="cluster-select-view" class="cluster-select-view" style="display:none">
+      <div class="cs-header">
+        <div class="cs-title">Select Clusters</div>
+        <p class="cs-hint">Choose exactly 2 clusters tagged <code>diff=true</code> &mdash; first selected = A, second = B</p>
+      </div>
+      <div id="cluster-list" class="cluster-list"></div>
+      <div class="cs-footer">
+        <span id="cs-count" class="cs-count">0 / 2 selected</span>
+        <button id="btn-compare-clusters" class="btn btn-primary" disabled>
+          Compare
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ── K8s Diff view ──────────────────────────────────────────────────── -->
+    <div id="k8s-diff-view" class="k8s-diff-view" style="display:none">
+
+      <!-- Selector panels -->
+      <div class="selectors-row">
+
+        <!-- Left / A panel -->
+        <div class="selector-panel" id="panel-left">
+          <div class="panel-label">
+            <span class="badge badge-left">A</span>
+            <span>Source</span>
+          </div>
+
+          <div class="selector-grid" id="left-selector-grid">
+            <!-- AKS mode: cluster name (hidden by default) -->
+            <div class="field-group" id="left-aks-field" style="display:none">
+              <label>Cluster</label>
+              <div class="aks-cluster-display" id="left-aks-display">—</div>
             </div>
-          </div>
-          <div class="field-group">
-            <label>Context</label>
-            <select id="left-context" disabled>
-              <option value="">— select context —</option>
-            </select>
-          </div>
-          <div class="field-group">
-            <label>Namespace</label>
-            <select id="left-namespace" disabled>
-              <option value="">— select namespace —</option>
-            </select>
-          </div>
-
-          <!-- Deployment field with view toggle -->
-          <div class="field-group">
-            <div class="dep-label-row">
-              <label>Deployment</label>
-              <div class="dep-view-btns" id="left-dep-view-btns" style="display:none">
-                <button class="dep-view-btn active" data-depview="select" title="Dropdown">▾ Select</button>
-                <button class="dep-view-btn" data-depview="list" title="List view">≡ List</button>
+            <!-- File mode: kubeconfig picker -->
+            <div class="field-group" id="left-kubeconfig-field">
+              <label>Kubeconfig</label>
+              <div class="file-input-row">
+                <input type="text" id="left-kubeconfig" placeholder="Default (~/.kube/config)" readonly />
+                <button class="btn btn-sm" id="left-btn-browse">Browse</button>
+                <button class="btn btn-sm btn-ghost" id="left-btn-default" title="Use default kubeconfig">↺</button>
               </div>
             </div>
-            <!-- Select view (default) -->
-            <select id="left-deployment" disabled>
-              <option value="">— select deployment —</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- List view (shown when ≡ List is active) -->
-        <div id="left-dep-list-wrap" class="dep-list-wrap" style="display:none">
-          <div class="dep-list-toolbar">
-            <span class="dep-list-count" id="left-dep-count"></span>
-            <span class="dep-list-hint">Click to auto-compare with B</span>
-            <input type="text" id="left-dep-search" placeholder="Filter…" />
-          </div>
-          <div id="left-dep-list" class="dep-list-inline"></div>
-        </div>
-
-        <div class="panel-status" id="left-status"></div>
-      </div>
-
-      <div class="vs-divider"><span>VS</span></div>
-
-      <!-- ── Right / B panel ────────────────────────────────────────────── -->
-      <div class="selector-panel" id="panel-right">
-        <div class="panel-label">
-          <span class="badge badge-right">B</span>
-          <span>Target</span>
-        </div>
-        <div class="selector-grid">
-          <div class="field-group">
-            <label>Kubeconfig</label>
-            <div class="file-input-row">
-              <input type="text" id="right-kubeconfig" placeholder="Default (~/.kube/config)" readonly />
-              <button class="btn btn-sm" id="right-btn-browse">Browse</button>
-              <button class="btn btn-sm btn-ghost" id="right-btn-default" title="Use default kubeconfig">↺</button>
+            <!-- Context -->
+            <div class="field-group" id="left-context-field">
+              <label>Context</label>
+              <select id="left-context" disabled>
+                <option value="">— select context —</option>
+              </select>
+            </div>
+            <!-- Namespace -->
+            <div class="field-group">
+              <label>Namespace</label>
+              <select id="left-namespace" disabled>
+                <option value="">— select namespace —</option>
+              </select>
+            </div>
+            <!-- Deployment with view toggle -->
+            <div class="field-group">
+              <div class="dep-label-row">
+                <label>Deployment</label>
+                <div class="dep-view-btns" id="left-dep-view-btns" style="display:none">
+                  <button class="dep-view-btn active" data-depview="select" title="Dropdown">▾ Select</button>
+                  <button class="dep-view-btn" data-depview="list" title="List view">≡ List</button>
+                </div>
+              </div>
+              <select id="left-deployment" disabled>
+                <option value="">— select deployment —</option>
+              </select>
             </div>
           </div>
-          <div class="field-group">
-            <label>Context</label>
-            <select id="right-context" disabled>
-              <option value="">— select context —</option>
-            </select>
+
+          <!-- List view -->
+          <div id="left-dep-list-wrap" class="dep-list-wrap" style="display:none">
+            <div class="dep-list-toolbar">
+              <span class="dep-list-count" id="left-dep-count"></span>
+              <span class="dep-list-hint">Click to auto-compare with B</span>
+              <input type="text" id="left-dep-search" placeholder="Filter…" />
+            </div>
+            <div id="left-dep-list" class="dep-list-inline"></div>
           </div>
-          <div class="field-group">
-            <label>Namespace</label>
-            <select id="right-namespace" disabled>
-              <option value="">— select namespace —</option>
-            </select>
+
+          <div class="panel-status" id="left-status"></div>
+        </div>
+
+        <div class="vs-divider"><span>VS</span></div>
+
+        <!-- Right / B panel -->
+        <div class="selector-panel" id="panel-right">
+          <div class="panel-label">
+            <span class="badge badge-right">B</span>
+            <span>Target</span>
           </div>
-          <div class="field-group">
-            <label>Deployment</label>
-            <select id="right-deployment" disabled>
-              <option value="">— select deployment —</option>
-            </select>
+          <div class="selector-grid" id="right-selector-grid">
+            <!-- AKS mode: cluster name (hidden by default) -->
+            <div class="field-group" id="right-aks-field" style="display:none">
+              <div class="aks-label-row">
+                <label>Cluster</label>
+                <button class="btn btn-ghost btn-xs" id="right-btn-use-file" title="Switch to kubeconfig file">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+                  </svg>
+                  Use file
+                </button>
+              </div>
+              <div class="aks-cluster-display" id="right-aks-display">—</div>
+            </div>
+            <!-- File mode: kubeconfig picker -->
+            <div class="field-group" id="right-kubeconfig-field">
+              <label>Kubeconfig</label>
+              <div class="file-input-row">
+                <input type="text" id="right-kubeconfig" placeholder="Default (~/.kube/config)" readonly />
+                <button class="btn btn-sm" id="right-btn-browse">Browse</button>
+                <button class="btn btn-sm btn-ghost" id="right-btn-default" title="Use default kubeconfig">↺</button>
+              </div>
+            </div>
+            <!-- Context -->
+            <div class="field-group" id="right-context-field">
+              <label>Context</label>
+              <select id="right-context" disabled>
+                <option value="">— select context —</option>
+              </select>
+            </div>
+            <!-- Namespace -->
+            <div class="field-group">
+              <label>Namespace</label>
+              <select id="right-namespace" disabled>
+                <option value="">— select namespace —</option>
+              </select>
+            </div>
+            <!-- Deployment -->
+            <div class="field-group">
+              <label>Deployment</label>
+              <select id="right-deployment" disabled>
+                <option value="">— select deployment —</option>
+              </select>
+            </div>
+          </div>
+          <div class="panel-status" id="right-status"></div>
+        </div>
+      </div>
+
+      <!-- Filter bar -->
+      <div class="filter-bar" id="filter-bar" style="display:none">
+        <div class="filter-left">
+          <input type="text" id="search-input" placeholder="Filter by key name…" />
+          <div class="filter-toggles">
+            <button class="toggle-btn active" id="filter-all" data-filter="all">All</button>
+            <button class="toggle-btn" id="filter-diff" data-filter="diff">
+              <span class="dot dot-diff"></span> Different
+            </button>
+            <button class="toggle-btn" id="filter-same" data-filter="same">
+              <span class="dot dot-same"></span> Same
+            </button>
+            <button class="toggle-btn" id="filter-missing" data-filter="missing">
+              <span class="dot dot-missing"></span> Missing
+            </button>
           </div>
         </div>
-        <div class="panel-status" id="right-status"></div>
+        <div class="filter-right">
+          <div class="stats" id="stats"></div>
+          <label class="toggle-secrets">
+            <input type="checkbox" id="toggle-mask" checked />
+            Mask secret values
+          </label>
+        </div>
+      </div>
+
+      <!-- Comparison table -->
+      <div class="table-wrapper" id="table-wrapper">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-icon"><img src="../logo.png" alt="" /></div>
+          <p>Select deployments from both sides and click <strong>Compare</strong></p>
+        </div>
+        <table class="diff-table" id="diff-table" style="display:none">
+          <thead>
+            <tr>
+              <th class="col-key">ENV Key</th>
+              <th class="col-source">Source</th>
+              <th class="col-value col-a">
+                <span class="badge badge-left">A</span>
+                <span id="th-left-label">—</span>
+              </th>
+              <th class="col-value col-b">
+                <span class="badge badge-right">B</span>
+                <span id="th-right-label">—</span>
+              </th>
+              <th class="col-status">Status</th>
+            </tr>
+          </thead>
+          <tbody id="diff-body"></tbody>
+        </table>
+      </div>
+
+    </div><!-- /#k8s-diff-view -->
+
+    <!-- ── Storage account selection view ───────────────────────────────── -->
+    <div id="storage-select-view" class="cluster-select-view" style="display:none">
+      <div class="cs-header">
+        <div class="cs-title">Select Storage Accounts</div>
+        <p class="cs-hint">Choose 2 or more accounts tagged <code>diff=true</code> to compare containers</p>
+      </div>
+      <div id="storage-account-list" class="cluster-list"></div>
+      <div class="cs-footer">
+        <span id="sa-count" class="cs-count">0 selected</span>
+        <button id="btn-compare-storage" class="btn btn-primary" disabled>
+          Compare
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </button>
       </div>
     </div>
 
-    <!-- Filter bar -->
-    <div class="filter-bar" id="filter-bar" style="display:none">
-      <div class="filter-left">
-        <input type="text" id="search-input" placeholder="Filter by key name…" />
-        <div class="filter-toggles">
-          <button class="toggle-btn active" id="filter-all" data-filter="all">All</button>
-          <button class="toggle-btn" id="filter-diff" data-filter="diff">
-            <span class="dot dot-diff"></span> Different
-          </button>
-          <button class="toggle-btn" id="filter-same" data-filter="same">
-            <span class="dot dot-same"></span> Same
-          </button>
-          <button class="toggle-btn" id="filter-missing" data-filter="missing">
-            <span class="dot dot-missing"></span> Missing
-          </button>
+    <!-- ── Storage diff result view ──────────────────────────────────────── -->
+    <div id="storage-diff-result-view" class="storage-diff-result-view" style="display:none">
+      <div class="sdr-toolbar">
+        <div class="sdr-toolbar-left">
+          <div class="filter-toggles">
+            <button class="toggle-btn active" data-sdr-filter="all">All</button>
+            <button class="toggle-btn" data-sdr-filter="partial">
+              <span class="dot" style="background:var(--red)"></span> Missing in some
+            </button>
+            <button class="toggle-btn" data-sdr-filter="complete">
+              <span class="dot" style="background:var(--green)"></span> In all
+            </button>
+          </div>
+          <input type="text" id="sdr-search" placeholder="Filter container name…" />
         </div>
+        <div class="sdr-stats" id="sdr-stats"></div>
       </div>
-      <div class="filter-right">
-        <div class="stats" id="stats"></div>
-        <label class="toggle-secrets">
-          <input type="checkbox" id="toggle-mask" checked />
-          Mask secret values
-        </label>
+      <div class="sdr-table-wrap">
+        <table class="sdr-table">
+          <thead id="sdr-head"></thead>
+          <tbody id="sdr-body"></tbody>
+        </table>
       </div>
     </div>
 
-    <!-- Comparison table -->
-    <div class="table-wrapper" id="table-wrapper">
-      <div class="empty-state" id="empty-state">
-        <div class="empty-icon"><img src="../logo.png" alt="" /></div>
-        <p>Select deployments from both sides and click <strong>Compare</strong></p>
+    <!-- Auth overlay -->
+    <div class="auth-overlay" id="auth-overlay" style="display:none">
+      <div class="auth-card">
+        <svg class="auth-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+        </svg>
+        <div class="auth-title">Authentication Required</div>
+        <p class="auth-desc" id="auth-message"></p>
+        <button id="btn-az-login" class="btn btn-primary">Login with Azure</button>
+        <p class="auth-status" id="auth-status"></p>
       </div>
-      <table class="diff-table" id="diff-table" style="display:none">
-        <thead>
-          <tr>
-            <th class="col-key">ENV Key</th>
-            <th class="col-source">Source</th>
-            <th class="col-value col-a">
-              <span class="badge badge-left">A</span>
-              <span id="th-left-label">—</span>
-            </th>
-            <th class="col-value col-b">
-              <span class="badge badge-right">B</span>
-              <span id="th-right-label">—</span>
-            </th>
-            <th class="col-status">Status</th>
-          </tr>
-        </thead>
-        <tbody id="diff-body"></tbody>
-      </table>
     </div>
 
     <!-- Loading overlay -->

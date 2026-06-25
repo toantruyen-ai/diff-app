@@ -25,16 +25,53 @@ const el = {
     depSearch:   $('left-dep-search'),
     depList:     $('left-dep-list'),
     depCount:    $('left-dep-count'),
+    selectorGrid:    $('left-selector-grid'),
+    aksField:        $('left-aks-field'),
+    aksDisplay:      $('left-aks-display'),
+    kubeconfigField: $('left-kubeconfig-field'),
+    contextField:    $('left-context-field'),
   },
   right: {
     kubeconfig: $('right-kubeconfig'), btnBrowse: $('right-btn-browse'),
     btnDefault: $('right-btn-default'), context: $('right-context'),
     namespace:  $('right-namespace'),  deployment: $('right-deployment'),
     status:     $('right-status'),
+    selectorGrid:    $('right-selector-grid'),
+    aksField:        $('right-aks-field'),
+    aksDisplay:      $('right-aks-display'),
+    kubeconfigField: $('right-kubeconfig-field'),
+    contextField:    $('right-context-field'),
+    btnUseFile:      $('right-btn-use-file'),
   },
-  btnCompare:     $('btn-compare'),
-  btnClear:       $('btn-clear'),
-  filterBar:      $('filter-bar'),
+  btnCompare:          $('btn-compare'),
+  btnClear:            $('btn-clear'),
+  btnBackHome:         $('btn-back-home'),
+  titlebarActions:     $('titlebar-actions'),
+  homeView:            $('home-view'),
+  clusterSelectView:   $('cluster-select-view'),
+  clusterList:         $('cluster-list'),
+  csCount:             $('cs-count'),
+  btnCompareClusters:     $('btn-compare-clusters'),
+  k8sDiffView:            $('k8s-diff-view'),
+  cardK8sDiff:            $('card-k8s-diff'),
+  cardStorageDiff:        $('card-storage-diff'),
+  storageSelectView:      $('storage-select-view'),
+  storageAccountList:     $('storage-account-list'),
+  saCount:                $('sa-count'),
+  btnCompareStorage:      $('btn-compare-storage'),
+  storageDiffResultView:  $('storage-diff-result-view'),
+  sdrHead:                $('sdr-head'),
+  sdrBody:                $('sdr-body'),
+  sdrStats:               $('sdr-stats'),
+  sdrSearch:              $('sdr-search'),
+  sdrFilterBtns:          document.querySelectorAll('[data-sdr-filter]'),
+  tokenExpiry:         $('token-expiry'),
+  tokenCountdown:      $('token-countdown'),
+  authOverlay:         $('auth-overlay'),
+  authMessage:      $('auth-message'),
+  authStatus:       $('auth-status'),
+  btnAzLogin:       $('btn-az-login'),
+  filterBar:        $('filter-bar'),
   searchInput:    $('search-input'),
   filterBtns:     document.querySelectorAll('.toggle-btn[data-filter]'),
   diffTable:      $('diff-table'),
@@ -481,6 +518,535 @@ function escHtml(str) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+   VIEW SWITCHING
+   ════════════════════════════════════════════════════════════════════════════ */
+let panelsInitialized = false;
+
+const BACK_TARGETS = {
+  'cluster-select':      'home',
+  'k8s-diff':            'cluster-select',
+  'storage-select':      'home',
+  'storage-diff-result': 'storage-select',
+};
+
+function showView(view) {
+  el.homeView.style.display              = view === 'home'                ? 'flex' : 'none';
+  el.clusterSelectView.style.display     = view === 'cluster-select'      ? 'flex' : 'none';
+  el.k8sDiffView.style.display           = view === 'k8s-diff'            ? 'flex' : 'none';
+  el.storageSelectView.style.display     = view === 'storage-select'      ? 'flex' : 'none';
+  el.storageDiffResultView.style.display = view === 'storage-diff-result' ? 'flex' : 'none';
+  el.btnBackHome.style.display           = view !== 'home'                ? ''     : 'none';
+  el.titlebarActions.style.display       = view === 'k8s-diff'            ? ''     : 'none';
+  el.btnBackHome.dataset.target          = BACK_TARGETS[view] || 'home';
+}
+
+el.btnBackHome.addEventListener('click', () => {
+  showView(el.btnBackHome.dataset.target || 'home');
+});
+
+el.cardK8sDiff.addEventListener('click', () => {
+  showView('cluster-select');
+  loadClusterList();
+});
+
+/* ════════════════════════════════════════════════════════════════════════════
+   CLUSTER SELECTION
+   ════════════════════════════════════════════════════════════════════════════ */
+let selectedClusters = [];
+
+async function loadClusterList() {
+  selectedClusters = [];
+  el.clusterList.innerHTML = '<div class="cs-loading">Loading clusters…</div>';
+  el.csCount.textContent = '0 / 2 selected';
+  el.btnCompareClusters.disabled = true;
+
+  showLoading('Fetching AKS clusters…');
+  const result = await window.k8sApi.listAksClusters();
+  hideLoading();
+
+  if (!result.ok) {
+    el.clusterList.innerHTML = `<div class="cs-error">Failed to load clusters:<br>${escHtml(result.error)}</div>`;
+    return;
+  }
+  if (result.clusters.length === 0) {
+    el.clusterList.innerHTML = '<div class="cs-empty">No clusters found with tag <code>diff=true</code></div>';
+    return;
+  }
+  renderClusterList(result.clusters);
+}
+
+function clusterKey(c) {
+  return `${c.name}::${c.resourceGroup}`;
+}
+
+function envTagClass(env) {
+  if (!env) return 'env-unknown';
+  const e = env.toLowerCase();
+  if (e === 'production' || e === 'prod') return 'env-prod';
+  if (e === 'staging' || e === 'stage') return 'env-staging';
+  if (e === 'development' || e === 'dev') return 'env-dev';
+  if (e === 'sandbox' || e === 'sand') return 'env-sandbox';
+  if (e === 'uat') return 'env-uat';
+  return 'env-other';
+}
+
+function renderClusterList(clusters) {
+  el.clusterList.innerHTML = '';
+  for (const c of clusters) {
+    const item = document.createElement('div');
+    item.className = 'cluster-item';
+    item.dataset.key = clusterKey(c);
+    const envHtml = c.environment
+      ? `<span class="ci-env-tag ${envTagClass(c.environment)}">${escHtml(c.environment)}</span>`
+      : `<span class="ci-env-tag env-unknown">—</span>`;
+    item.innerHTML = `
+      <div class="ci-check"></div>
+      <div class="ci-body">
+        <div class="ci-name-row">
+          ${envHtml}
+          <span class="ci-name">${escHtml(c.name)}</span>
+        </div>
+        <div class="ci-meta">${escHtml(c.resourceGroup)} &middot; ${escHtml(c.location)} &middot; k8s ${escHtml(c.kubernetesVersion)}</div>
+      </div>
+      <div class="ci-badge" style="visibility:hidden">A</div>
+    `;
+    item.addEventListener('click', () => toggleCluster(item, c));
+    el.clusterList.appendChild(item);
+  }
+}
+
+function toggleCluster(item, cluster) {
+  const key = clusterKey(cluster);
+  const idx = selectedClusters.findIndex((c) => clusterKey(c) === key);
+  if (idx >= 0) {
+    selectedClusters.splice(idx, 1);
+  } else {
+    if (selectedClusters.length >= 2) return;
+    selectedClusters.push(cluster);
+  }
+  refreshClusterSelectionUI();
+}
+
+function refreshClusterSelectionUI() {
+  const maxReached = selectedClusters.length >= 2;
+  el.clusterList.querySelectorAll('.cluster-item').forEach((item) => {
+    const idx = selectedClusters.findIndex((c) => clusterKey(c) === item.dataset.key);
+    const badge = item.querySelector('.ci-badge');
+    item.classList.remove('ci-selected-a', 'ci-selected-b', 'ci-max-reached');
+    badge.style.visibility = 'hidden';
+    if (idx === 0) {
+      item.classList.add('ci-selected-a');
+      badge.textContent = 'A';
+      badge.style.visibility = '';
+    } else if (idx === 1) {
+      item.classList.add('ci-selected-b');
+      badge.textContent = 'B';
+      badge.style.visibility = '';
+    } else if (maxReached) {
+      item.classList.add('ci-max-reached');
+    }
+  });
+  el.csCount.textContent = `${selectedClusters.length} / 2 selected`;
+  el.btnCompareClusters.disabled = selectedClusters.length !== 2;
+}
+
+el.btnCompareClusters.addEventListener('click', async () => {
+  if (selectedClusters.length !== 2) return;
+  el.btnCompareClusters.disabled = true;
+
+  try {
+    showLoading(`Getting credentials for ${selectedClusters[0].name}…`);
+    const credA = await window.k8sApi.getAksCredentials(selectedClusters[0].name, selectedClusters[0].resourceGroup);
+    if (!credA.ok) throw new Error(`Cannot get credentials for ${selectedClusters[0].name}: ${credA.error}`);
+
+    showLoading(`Getting credentials for ${selectedClusters[1].name}…`);
+    const credB = await window.k8sApi.getAksCredentials(selectedClusters[1].name, selectedClusters[1].resourceGroup);
+    if (!credB.ok) throw new Error(`Cannot get credentials for ${selectedClusters[1].name}: ${credB.error}`);
+
+    hideLoading();
+    await initAksPanels(
+      { ...selectedClusters[0], kubeconfigId: credA.kubeconfigId },
+      { ...selectedClusters[1], kubeconfigId: credB.kubeconfigId }
+    );
+    showView('k8s-diff');
+  } catch (e) {
+    hideLoading();
+    alert(e.message);
+    el.btnCompareClusters.disabled = false;
+  }
+});
+
+function setAksMode(side, clusterName, environment) {
+  const s = el[side];
+  s.aksField.style.display        = '';
+  s.kubeconfigField.style.display = 'none';
+  s.contextField.style.display    = 'none';
+  s.selectorGrid.classList.add('col-3');
+  const envHtml = environment
+    ? `<span class="ci-env-tag ${envTagClass(environment)} env-inline">${escHtml(environment)}</span>`
+    : '';
+  s.aksDisplay.innerHTML = `${envHtml}<span class="aks-name-text">${escHtml(clusterName)}</span>`;
+}
+
+el.right.btnUseFile.addEventListener('click', () => {
+  const s = el.right;
+  // Switch right panel back to file mode
+  s.aksField.style.display        = 'none';
+  s.kubeconfigField.style.display = '';
+  s.contextField.style.display    = '';
+  s.selectorGrid.classList.remove('col-3');
+  // Reset state and reload from default kubeconfig
+  state.right.kubeconfig   = null;
+  state.right.context      = null;
+  state.right.namespace    = null;
+  state.right.deployment   = null;
+  state.right.envs         = null;
+  s.kubeconfig.value       = '';
+  loadContexts('right');
+});
+
+function initPanelsOnce() {
+  if (panelsInitialized) return;
+  panelsInitialized = true;
+  setupPanel('left');
+  setupPanel('right');
+}
+
+async function initAksPanels(clusterA, clusterB) {
+  initPanelsOnce();
+  // Reset dropdowns without touching kubeconfig state
+  resetBelow('left', 'kubeconfig');
+  resetBelow('right', 'kubeconfig');
+  // Set kubeconfig references (short IDs stored in main process)
+  state.left.kubeconfig  = clusterA.kubeconfigId;
+  state.right.kubeconfig = clusterB.kubeconfigId;
+  // Switch panels to AKS display mode
+  setAksMode('left',  clusterA.name, clusterA.environment);
+  setAksMode('right', clusterB.name, clusterB.environment);
+  // Load contexts (auto-selects if only 1 context, then cascades to namespaces)
+  await Promise.all([loadContexts('left'), loadContexts('right')]);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   STORAGE DIFF
+   ════════════════════════════════════════════════════════════════════════════ */
+let selectedAccounts = [];
+
+el.cardStorageDiff.addEventListener('click', () => {
+  showView('storage-select');
+  loadStorageAccountList();
+});
+
+async function loadStorageAccountList() {
+  selectedAccounts = [];
+  el.storageAccountList.innerHTML = '<div class="cs-loading">Loading storage accounts…</div>';
+  el.saCount.textContent = '0 selected';
+  el.btnCompareStorage.disabled = true;
+
+  showLoading('Fetching storage accounts…');
+  const result = await window.k8sApi.listStorageAccounts();
+  hideLoading();
+
+  if (!result.ok) {
+    el.storageAccountList.innerHTML = `<div class="cs-error">Failed to load accounts:<br>${escHtml(result.error)}</div>`;
+    return;
+  }
+  if (result.accounts.length === 0) {
+    el.storageAccountList.innerHTML = '<div class="cs-empty">No storage accounts found with tag <code>diff=true</code></div>';
+    return;
+  }
+  renderStorageAccountList(result.accounts);
+}
+
+function renderStorageAccountList(accounts) {
+  el.storageAccountList.innerHTML = '';
+  for (const a of accounts) {
+    const item = document.createElement('div');
+    item.className = 'cluster-item';
+    item.dataset.name = a.name;
+    const envHtml = a.environment
+      ? `<span class="ci-env-tag ${envTagClass(a.environment)}">${escHtml(a.environment)}</span>`
+      : `<span class="ci-env-tag env-unknown">—</span>`;
+    item.innerHTML = `
+      <div class="ci-check"></div>
+      <div class="ci-body">
+        <div class="ci-name-row">${envHtml}<span class="ci-name">${escHtml(a.name)}</span></div>
+        <div class="ci-meta">${escHtml(a.resourceGroup)} &middot; ${escHtml(a.location)}</div>
+      </div>
+    `;
+    item.addEventListener('click', () => toggleStorageAccount(item, a));
+    el.storageAccountList.appendChild(item);
+  }
+}
+
+function toggleStorageAccount(item, account) {
+  const idx = selectedAccounts.findIndex((a) => a.name === account.name);
+  if (idx >= 0) {
+    selectedAccounts.splice(idx, 1);
+    item.classList.remove('ci-selected-a', 'ci-selected-b');
+    item.querySelector('.ci-check').classList.remove('ci-checked');
+  } else {
+    selectedAccounts.push(account);
+    item.classList.add(selectedAccounts.length === 1 ? 'ci-selected-a' : 'ci-selected-b');
+  }
+  refreshStorageSelectionUI();
+}
+
+function refreshStorageSelectionUI() {
+  el.storageAccountList.querySelectorAll('.cluster-item').forEach((item) => {
+    const idx = selectedAccounts.findIndex((a) => a.name === item.dataset.name);
+    item.classList.remove('ci-selected-a', 'ci-selected-b');
+    if (idx >= 0) {
+      item.classList.add(idx === 0 ? 'ci-selected-a' : 'ci-selected-b');
+    }
+  });
+  const n = selectedAccounts.length;
+  el.saCount.textContent = n === 0 ? '0 selected' : `${n} selected`;
+  el.btnCompareStorage.disabled = n < 2;
+}
+
+el.btnCompareStorage.addEventListener('click', async () => {
+  if (selectedAccounts.length < 2) return;
+  el.btnCompareStorage.disabled = true;
+
+  try {
+    showLoading(`Listing containers for ${selectedAccounts.length} accounts…`);
+    const results = await window.k8sApi.listStorageContainers(selectedAccounts);
+    hideLoading();
+    renderStorageDiffTable(results);
+    showView('storage-diff-result');
+  } catch (e) {
+    hideLoading();
+    alert(`Failed to list containers: ${e.message}`);
+    el.btnCompareStorage.disabled = false;
+  }
+});
+
+// ── Storage diff table ────────────────────────────────────────────────────────
+let sdrFilter = 'all';
+let sdrSearch = '';
+let lastSdrRows = [];
+
+el.sdrFilterBtns.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    el.sdrFilterBtns.forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    sdrFilter = btn.dataset.sdrFilter;
+    applySdrFilter();
+  });
+});
+
+el.sdrSearch.addEventListener('input', () => {
+  sdrSearch = el.sdrSearch.value.toLowerCase();
+  applySdrFilter();
+});
+
+function applySdrFilter() {
+  el.sdrBody.querySelectorAll('tr').forEach((row) => {
+    const matchFilter = sdrFilter === 'all' || row.dataset.status === sdrFilter;
+    const matchSearch = !sdrSearch || row.dataset.container.includes(sdrSearch);
+    row.style.display = matchFilter && matchSearch ? '' : 'none';
+  });
+}
+
+function renderStorageDiffTable(results) {
+  // Build unique container set
+  const allContainers = new Set();
+  for (const r of results) {
+    for (const c of r.containers) allContainers.add(c);
+  }
+  const sorted = Array.from(allContainers).sort();
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  el.sdrHead.innerHTML = '';
+  const hRow = document.createElement('tr');
+  let hHtml = '<th class="sdr-col-container">Container</th>';
+  for (const r of results) {
+    const envHtml = r.environment
+      ? `<span class="ci-env-tag ${envTagClass(r.environment)} env-inline">${escHtml(r.environment)}</span>`
+      : '';
+    const errHtml = r.ok ? '' : `<div class="sdr-account-error" title="${escHtml(r.error)}">⚠ error</div>`;
+    hHtml += `
+      <th class="sdr-col-account">
+        <div class="sdr-th-account">
+          ${envHtml}
+          <span class="sdr-th-name">${escHtml(r.name)}</span>
+          ${errHtml}
+        </div>
+      </th>`;
+  }
+  hHtml += '<th class="sdr-col-status">Status</th>';
+  hRow.innerHTML = hHtml;
+  el.sdrHead.appendChild(hRow);
+
+  // ── Body ──────────────────────────────────────────────────────────────────
+  el.sdrBody.innerHTML = '';
+  let totalComplete = 0, totalPartial = 0;
+
+  for (const container of sorted) {
+    const presence = results.map((r) => r.containers.includes(container));
+    const allHave = presence.every(Boolean);
+    const status = allHave ? 'complete' : 'partial';
+    if (allHave) totalComplete++; else totalPartial++;
+
+    const row = document.createElement('tr');
+    row.className = `sdr-row-${status}`;
+    row.dataset.status = status;
+    row.dataset.container = container.toLowerCase();
+
+    let cells = `<td class="sdr-cell-name">${escHtml(container)}</td>`;
+    results.forEach((r, i) => {
+      if (!r.ok) {
+        cells += `<td class="sdr-cell-check sdr-unknown" title="${escHtml(r.error)}">?</td>`;
+      } else {
+        cells += `<td class="sdr-cell-check">${presence[i]
+          ? '<span class="sdr-present">✓</span>'
+          : '<span class="sdr-missing">✗</span>'
+        }</td>`;
+      }
+    });
+    cells += `<td class="sdr-col-status">
+      <span class="sdr-pill sdr-pill-${status}">${allHave ? 'ALL' : 'PARTIAL'}</span>
+    </td>`;
+    row.innerHTML = cells;
+    el.sdrBody.appendChild(row);
+  }
+
+  const total = sorted.length;
+  el.sdrStats.textContent = total === 0
+    ? 'No containers found'
+    : `${total} containers · ${totalPartial} missing in some · ${totalComplete} in all`;
+
+  // Reset filters
+  sdrFilter = 'all';
+  sdrSearch = '';
+  el.sdrSearch.value = '';
+  el.sdrFilterBtns.forEach((b) => b.classList.toggle('active', b.dataset.sdrFilter === 'all'));
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   TOKEN EXPIRY COUNTDOWN
+   ════════════════════════════════════════════════════════════════════════════ */
+let _countdownInterval = null;
+
+async function startTokenCountdown() {
+  if (_countdownInterval) {
+    clearInterval(_countdownInterval);
+    _countdownInterval = null;
+  }
+
+  const result = await window.k8sApi.getTokenExpiry();
+  if (!result.ok) return;
+
+  const expiresAt = result.expiresAt;
+  el.tokenExpiry.style.display = '';
+
+  function tick() {
+    const remaining = Math.floor((expiresAt - Date.now()) / 1000);
+
+    if (remaining <= 0) {
+      clearInterval(_countdownInterval);
+      _countdownInterval = null;
+      el.tokenCountdown.textContent = 'Expired';
+      el.tokenExpiry.className = 'token-expiry token-expired';
+      setTimeout(() => {
+        showAuthModal('Azure token has expired. Please login to continue.');
+      }, 800);
+      return;
+    }
+
+    let display;
+    if (remaining > 3600) {
+      const h = Math.floor(remaining / 3600);
+      const m = Math.floor((remaining % 3600) / 60);
+      display = `${h}h ${m}m`;
+    } else {
+      const m = Math.floor(remaining / 60);
+      const s = remaining % 60;
+      display = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+    el.tokenCountdown.textContent = display;
+
+    if (remaining <= 60) {
+      el.tokenExpiry.className = 'token-expiry token-danger';
+    } else if (remaining <= 300) {
+      el.tokenExpiry.className = 'token-expiry token-warning';
+    } else {
+      el.tokenExpiry.className = 'token-expiry';
+    }
+  }
+
+  tick();
+  _countdownInterval = setInterval(tick, 1000);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   AUTH CHECK
+   ════════════════════════════════════════════════════════════════════════════ */
+async function checkAuth() {
+  showLoading('Checking authentication…');
+  try {
+    const [azResult, kubeResult] = await Promise.all([
+      window.k8sApi.checkAzureAuth(),
+      window.k8sApi.checkKubeloginAuth(),
+    ]);
+
+    if (!azResult.ok) {
+      hideLoading();
+      showAuthModal('Azure CLI session has expired. Please login to continue.');
+      return false;
+    }
+
+    if (!kubeResult.ok) {
+      hideLoading();
+      showAuthModal('Kubelogin token has expired. Please login again to refresh.');
+      return false;
+    }
+  } catch {
+    // If check fails (e.g. az not installed), proceed silently
+  }
+  hideLoading();
+  return true;
+}
+
+function showAuthModal(msg) {
+  el.authMessage.textContent = msg;
+  el.authStatus.textContent = '';
+  el.btnAzLogin.disabled = false;
+  el.btnAzLogin.textContent = 'Login with Azure';
+  el.authOverlay.style.display = 'flex';
+}
+
+function hideAuthModal() {
+  el.authOverlay.style.display = 'none';
+}
+
+el.btnAzLogin.addEventListener('click', async () => {
+  el.btnAzLogin.disabled = true;
+  el.btnAzLogin.textContent = 'Opening browser…';
+  el.authStatus.textContent = 'Waiting for browser authentication…';
+
+  const loginResult = await window.k8sApi.azLogin();
+  if (!loginResult.ok) {
+    el.authStatus.textContent = 'Login failed. Please try again.';
+    el.btnAzLogin.disabled = false;
+    el.btnAzLogin.textContent = 'Login with Azure';
+    return;
+  }
+
+  el.authStatus.textContent = 'Refreshing kubelogin…';
+  await window.k8sApi.kubeloginRefresh();
+
+  hideAuthModal();
+  showView('home');
+  startTokenCountdown();
+});
+
 /* ── Init ────────────────────────────────────────────────────────────────── */
-setupPanel('left');
-setupPanel('right');
+checkAuth().then((ok) => {
+  if (ok) {
+    showView('home');
+    startTokenCountdown();
+  }
+});

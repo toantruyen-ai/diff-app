@@ -2,13 +2,15 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const k8s = require('@kubernetes/client-node');
 const fs = require('fs');
+const { execSync, spawn, exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
+const os = require('os');
 
 // When launched as a packaged .app on macOS, the process inherits a bare PATH
 // (/usr/bin:/bin:/usr/sbin:/sbin) — kubelogin/kubectl plugins are not found.
 // Spawn a login shell once to read the user's real PATH and inject it.
 if (process.platform === 'darwin' && app.isPackaged) {
-  const { execSync } = require('child_process');
-  const os = require('os');
   try {
     const shell = process.env.SHELL || '/bin/zsh';
     const shellPath = execSync(`${shell} -l -c 'echo $PATH'`, {
@@ -61,6 +63,12 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// ── In-memory kubeconfig store (AKS credentials) ─────────────────────────────
+// Keys: 'aks:N'. Values: raw YAML string (normalized). Avoids passing large
+// YAML blobs through IPC on every k8s API call.
+const aksKcStore = new Map();
+let aksKcIdSeq = 0;
+
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 
 ipcMain.handle('select-kubeconfig', async () => {
@@ -76,14 +84,9 @@ ipcMain.handle('select-kubeconfig', async () => {
   return filePaths[0] || null;
 });
 
-ipcMain.handle('load-contexts', async (_e, kubeconfigPath) => {
+ipcMain.handle('load-contexts', async (_e, ref) => {
   try {
-    const kc = new k8s.KubeConfig();
-    if (kubeconfigPath) {
-      kc.loadFromFile(kubeconfigPath);
-    } else {
-      kc.loadFromDefault();
-    }
+    const kc = buildKubeConfig(ref, null);
     return kc.getContexts().map((ctx) => ctx.name);
   } catch (e) {
     throw new Error(`Failed to load contexts: ${e.message}`);
@@ -204,17 +207,198 @@ ipcMain.handle('load-envs', async (_e, kubeconfigPath, contextName, namespace, d
   return envMap;
 });
 
+ipcMain.handle('get-token-expiry', async () => {
+  try {
+    const output = execSync('az account get-access-token --output json', {
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: 'pipe',
+    });
+    const data = JSON.parse(output);
+    // expires_on is a Unix timestamp (seconds); expiresOn is a datetime string
+    const expiresAt = data.expires_on
+      ? data.expires_on * 1000
+      : new Date(data.expiresOn.replace(' ', 'T')).getTime();
+    return { ok: true, expiresAt };
+  } catch {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle('check-azure-auth', async () => {
+  try {
+    execSync('az account show --output none', { encoding: 'utf8', timeout: 8000, stdio: 'pipe' });
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle('check-kubelogin-auth', async () => {
+  const cacheDir = path.join(os.homedir(), '.kube', 'cache', 'kubelogin');
+  try {
+    if (!fs.existsSync(cacheDir)) return { ok: true };
+    const files = fs.readdirSync(cacheDir).filter((f) => f.endsWith('.json'));
+    if (files.length === 0) return { ok: true };
+    const now = Math.floor(Date.now() / 1000);
+    for (const file of files) {
+      try {
+        const content = JSON.parse(fs.readFileSync(path.join(cacheDir, file), 'utf8'));
+        const token = content.accessToken || content.access_token;
+        if (token) {
+          const parts = token.split('.');
+          if (parts.length === 3) {
+            const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+            if (payload.exp && payload.exp < now) return { ok: false };
+          }
+        }
+      } catch { /* skip unreadable cache file */ }
+    }
+    return { ok: true };
+  } catch {
+    return { ok: true };
+  }
+});
+
+ipcMain.handle('az-login', async () => {
+  return new Promise((resolve) => {
+    const proc = spawn('az', ['login'], { shell: true, stdio: 'pipe' });
+    proc.on('close', (code) => resolve({ ok: code === 0 }));
+    proc.on('error', (err) => resolve({ ok: false, error: err.message }));
+  });
+});
+
+ipcMain.handle('kubelogin-refresh', async () => {
+  try {
+    execSync('kubelogin convert-kubeconfig -l azurecli', {
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: 'pipe',
+    });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e.stderr || e.message) };
+  }
+});
+
+ipcMain.handle('list-aks-clusters', async () => {
+  try {
+    const output = execSync(
+      'az aks list --query "[?tags.diff==\'true\']" --output json',
+      { encoding: 'utf8', timeout: 30000, stdio: 'pipe' }
+    );
+    const clusters = JSON.parse(output);
+    return {
+      ok: true,
+      clusters: clusters.map((c) => ({
+        name: c.name,
+        resourceGroup: c.resourceGroup,
+        location: c.location,
+        kubernetesVersion: c.kubernetesVersion,
+        environment: (c.tags && c.tags.environment) ? c.tags.environment : '',
+      })),
+    };
+  } catch (e) {
+    return { ok: false, error: String(e.stderr || e.message) };
+  }
+});
+
+ipcMain.handle('get-aks-credentials', async (_e, name, resourceGroup) => {
+  const tmpFile = path.join(os.tmpdir(), `k8senvdiff-${process.pid}-${Date.now()}.yaml`);
+  try {
+    execSync(
+      `az aks get-credentials --name "${name}" --resource-group "${resourceGroup}" --file "${tmpFile}" --overwrite-existing`,
+      { encoding: 'utf8', timeout: 30000, stdio: 'pipe' }
+    );
+    // Normalize: strip BOM + leading whitespace, then validate by parsing once
+    const raw = fs.readFileSync(tmpFile, 'utf8').replace(/^﻿/, '').trimStart();
+    const kc = new k8s.KubeConfig();
+    kc.loadFromString(raw);
+    if (!kc.getCurrentCluster()) {
+      return { ok: false, error: `Kubeconfig for "${name}" has no active cluster after parsing` };
+    }
+    const kcId = `aks:${++aksKcIdSeq}`;
+    aksKcStore.set(kcId, raw);
+    return { ok: true, kubeconfigId: kcId };
+  } catch (e) {
+    return { ok: false, error: String(e.stderr || e.message) };
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+  }
+});
+
+ipcMain.handle('list-storage-accounts', async () => {
+  try {
+    const output = execSync(
+      'az storage account list --query "[?tags.diff==\'true\']" --output json',
+      { encoding: 'utf8', timeout: 30000, stdio: 'pipe' }
+    );
+    const accounts = JSON.parse(output);
+    return {
+      ok: true,
+      accounts: accounts.map((a) => ({
+        name: a.name,
+        resourceGroup: a.resourceGroup,
+        location: a.location,
+        environment: (a.tags && a.tags.environment) ? a.tags.environment : '',
+      })),
+    };
+  } catch (e) {
+    return { ok: false, error: String(e.stderr || e.message) };
+  }
+});
+
+ipcMain.handle('list-storage-containers', async (_e, accounts) => {
+  const results = await Promise.all(accounts.map(async (account) => {
+    try {
+      const { stdout } = await execAsync(
+        `az storage container list --account-name "${account.name}" --auth-mode login --output json`,
+        { timeout: 60000 }
+      );
+      const containers = JSON.parse(stdout.trim() || '[]');
+      return {
+        name: account.name,
+        environment: account.environment || '',
+        containers: containers.map((c) => c.name),
+        ok: true,
+      };
+    } catch (e) {
+      return {
+        name: account.name,
+        environment: account.environment || '',
+        containers: [],
+        ok: false,
+        error: String(e.stderr || e.message).split('\n')[0],
+      };
+    }
+  }));
+  return results;
+});
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function buildKubeConfig(kubeconfigPath, contextName) {
+function isKubeconfigContent(str) {
+  if (typeof str !== 'string') return false;
+  const s = str.replace(/^﻿/, '').trimStart();
+  return s.startsWith('apiVersion:') || s.startsWith('---');
+}
+
+function buildKubeConfig(ref, contextName) {
   const kc = new k8s.KubeConfig();
-  if (kubeconfigPath) {
-    kc.loadFromFile(kubeconfigPath);
-  } else {
+  if (!ref) {
     kc.loadFromDefault();
+  } else if (aksKcStore.has(ref)) {
+    // Stored AKS kubeconfig — already validated at fetch time
+    kc.loadFromString(aksKcStore.get(ref));
+  } else if (isKubeconfigContent(ref)) {
+    kc.loadFromString(ref.replace(/^﻿/, '').trimStart());
+  } else {
+    kc.loadFromFile(ref);
   }
   if (contextName) {
-    kc.setCurrentContext(contextName);
+    // Only override if the context actually exists; otherwise keep current-context from YAML
+    const exists = kc.getContexts().some((ctx) => ctx.name === contextName);
+    if (exists) kc.setCurrentContext(contextName);
   }
   return kc;
 }
