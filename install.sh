@@ -35,6 +35,13 @@ curl -fSL --progress-bar -o "$DMG_FILE" "$DMG_URL"
 echo "Mounting DMG..."
 MOUNT_POINT=$(hdiutil attach "$DMG_FILE" -nobrowse | grep '/Volumes' | awk -F'\t' '{print $NF}' | sed 's/[[:space:]]*$//')
 
+# Quit app if running
+if pgrep -x "$APP_NAME" > /dev/null 2>&1; then
+  echo "Quitting running app..."
+  osascript -e "quit app \"$APP_NAME\"" 2>/dev/null || pkill -x "$APP_NAME" || true
+  sleep 2
+fi
+
 # Remove old version if exists
 if [ -d "$APP_DIR" ]; then
   echo "Removing old version..."
@@ -57,3 +64,4 @@ rm -f "$DMG_FILE"
 
 echo ""
 echo "Done! ${APP_NAME} ${LATEST_TAG} installed successfully."
+open "$APP_DIR"

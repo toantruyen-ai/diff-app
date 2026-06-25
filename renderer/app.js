@@ -1269,8 +1269,9 @@ if (window.k8sApi.onUpdateAvailable) {
     el.updateBanner.style.display = 'flex';
   });
 
-  window.k8sApi.onUpdateError(() => {
-    el.updateBanner.style.display = 'none';
+  window.k8sApi.onUpdateError((msg) => {
+    el.updateBannerText.textContent = `Update failed: ${msg}`;
+    el.btnInstallUpdate.style.display = 'none';
   });
 
   el.btnInstallUpdate.addEventListener('click', () => window.k8sApi.installUpdate());

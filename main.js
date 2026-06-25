@@ -16,7 +16,7 @@ if (app.isPackaged) {
     autoUpdater = require('electron-updater').autoUpdater;
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.logger = null;
+    autoUpdater.logger = console;
 
     autoUpdater.on('update-available', (info) => {
       if (mainWindow) mainWindow.webContents.send('update-available', info.version);
