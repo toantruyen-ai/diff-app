@@ -30,6 +30,8 @@
     "productName": "Diff App",
     "publish": {
       "provider": "github",
+      "owner": "toantruyen-ai",
+      "repo": "diff-app",
       "releaseType": "release"
     },
     "icon": "build/icon",
