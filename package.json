@@ -4,7 +4,9 @@
   "description": "Compare Kubernetes application environment variables across clusters",
   "main": "main.js",
   "scripts": {
+    "prestart": "node scripts/patch-electron-name.js",
     "start": "electron .",
+    "predev": "node scripts/patch-electron-name.js",
     "dev": "electron . --dev",
     "build:mac": "electron-builder --mac",
     "build:linux": "electron-builder --linux",
