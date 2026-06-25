@@ -20,4 +20,5 @@ contextBridge.exposeInMainWorld('k8sApi', {
   installUpdate: () => ipcRenderer.invoke('install-update'),
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_e, v) => cb(v)),
   onUpdateDownloaded: (cb) => ipcRenderer.on('update-downloaded', (_e, v) => cb(v)),
+  onUpdateError: (cb) => ipcRenderer.on('update-error', (_e, msg) => cb(msg)),
 });

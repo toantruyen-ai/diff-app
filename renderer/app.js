@@ -1269,6 +1269,10 @@ if (window.k8sApi.onUpdateAvailable) {
     el.updateBanner.style.display = 'flex';
   });
 
+  window.k8sApi.onUpdateError(() => {
+    el.updateBanner.style.display = 'none';
+  });
+
   el.btnInstallUpdate.addEventListener('click', () => window.k8sApi.installUpdate());
   el.btnDismissUpdate.addEventListener('click', () => { el.updateBanner.style.display = 'none'; });
 }
