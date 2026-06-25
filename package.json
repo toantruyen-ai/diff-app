@@ -18,8 +18,8 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.devops.k8s-env-diff",
-    "productName": "K8s ENV Diff",
+    "appId": "com.devops.diff-app",
+    "productName": "Diff App",
     "publish": null,
     "icon": "build/icon",
     "files": [

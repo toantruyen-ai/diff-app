@@ -7,6 +7,8 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 const os = require('os');
 
+app.setName('Diff App');
+
 // When launched as a packaged .app on macOS, the process inherits a bare PATH
 // (/usr/bin:/bin:/usr/sbin:/sbin) — kubelogin/kubectl plugins are not found.
 // Spawn a login shell once to read the user's real PATH and inject it.
@@ -32,6 +34,8 @@ if (process.platform === 'darwin' && app.isPackaged) {
 
 let mainWindow;
 
+const ICON_PATH = path.join(__dirname, 'build', 'icon.icns');
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -45,6 +49,7 @@ function createWindow() {
     },
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0f1117',
+    icon: ICON_PATH,
     show: false,
   });
 
@@ -53,6 +58,9 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(ICON_PATH);
+  }
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
