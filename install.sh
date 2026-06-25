@@ -25,15 +25,15 @@ fi
 echo "Latest version: $LATEST_TAG"
 
 # Build download URL
-DMG_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${APP_NAME// /.}-${LATEST_TAG#v}-${DMG_SUFFIX}"
-DMG_FILE="/tmp/${APP_NAME// /-}-${LATEST_TAG}.dmg"
+DMG_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${APP_NAME}-${LATEST_TAG#v}-${DMG_SUFFIX}"
+DMG_FILE="/tmp/${APP_NAME}-${LATEST_TAG}.dmg"
 
 echo "Downloading: $DMG_URL"
 curl -fSL --progress-bar -o "$DMG_FILE" "$DMG_URL"
 
 # Mount DMG
 echo "Mounting DMG..."
-MOUNT_POINT=$(hdiutil attach "$DMG_FILE" -nobrowse -quiet | awk 'END{print $NF}')
+MOUNT_POINT=$(hdiutil attach "$DMG_FILE" -nobrowse | grep '/Volumes' | awk -F'\t' '{print $NF}' | sed 's/[[:space:]]*$//')
 
 # Remove old version if exists
 if [ -d "$APP_DIR" ]; then
