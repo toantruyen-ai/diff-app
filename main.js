@@ -7,6 +7,15 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 const os = require('os');
 
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(message || `Request timed out after ${ms / 1000}s`)), ms)
+    ),
+  ]);
+}
+
 app.setName('Diff-App');
 
 // ── Auto-updater (packaged app only) ──────────────────────────────────────────
@@ -133,7 +142,11 @@ ipcMain.handle('load-namespaces', async (_e, kubeconfigPath, contextName) => {
     // Try cluster-wide namespace list first; fall back to kubeconfig context namespaces
     try {
       const coreApi = kc.makeApiClient(k8s.CoreV1Api);
-      const res = await coreApi.listNamespace();
+      const res = await withTimeout(
+        coreApi.listNamespace(),
+        20000,
+        'Timed out listing namespaces — kubelogin may need re-authentication (run: kubelogin convert-kubeconfig -l azurecli)'
+      );
       return res.body.items.map((ns) => ns.metadata.name).sort();
     } catch (apiErr) {
       // RBAC may deny cluster-wide list — extract namespaces from kubeconfig contexts
@@ -153,7 +166,11 @@ ipcMain.handle('load-deployments', async (_e, kubeconfigPath, contextName, names
   try {
     const kc = buildKubeConfig(kubeconfigPath, contextName);
     const appsApi = kc.makeApiClient(k8s.AppsV1Api);
-    const res = await appsApi.listNamespacedDeployment(namespace);
+    const res = await withTimeout(
+      appsApi.listNamespacedDeployment(namespace),
+      20000,
+      'Timed out listing deployments — kubelogin may need re-authentication'
+    );
     return res.body.items.map((d) => d.metadata.name).sort();
   } catch (e) {
     throw new Error(`Failed to load deployments: ${e.message}`);
@@ -165,7 +182,11 @@ ipcMain.handle('load-envs', async (_e, kubeconfigPath, contextName, namespace, d
   const appsApi = kc.makeApiClient(k8s.AppsV1Api);
   const coreApi = kc.makeApiClient(k8s.CoreV1Api);
 
-  const depRes = await appsApi.readNamespacedDeployment(deploymentName, namespace);
+  const depRes = await withTimeout(
+    appsApi.readNamespacedDeployment(deploymentName, namespace),
+    20000,
+    'Timed out reading deployment — kubelogin may need re-authentication'
+  );
   const containers = depRes.body.spec.template.spec.containers || [];
 
   const envMap = {};
@@ -269,12 +290,28 @@ ipcMain.handle('check-azure-auth', async () => {
 });
 
 ipcMain.handle('check-kubelogin-auth', async () => {
+  // First try to find kubelogin binary
+  try {
+    execSync('which kubelogin || command -v kubelogin', { encoding: 'utf8', timeout: 3000, stdio: 'pipe' });
+  } catch {
+    // kubelogin not installed — skip check, k8s client will fail naturally
+    return { ok: true };
+  }
+
+  // Check cache for expired tokens
   const cacheDir = path.join(os.homedir(), '.kube', 'cache', 'kubelogin');
   try {
-    if (!fs.existsSync(cacheDir)) return { ok: true };
+    if (!fs.existsSync(cacheDir)) {
+      // No cache at all — tokens haven't been fetched yet, likely needs login
+      return { ok: false };
+    }
     const files = fs.readdirSync(cacheDir).filter((f) => f.endsWith('.json'));
-    if (files.length === 0) return { ok: true };
+    if (files.length === 0) {
+      // Cache dir exists but empty — needs login
+      return { ok: false };
+    }
     const now = Math.floor(Date.now() / 1000);
+    let anyValid = false;
     for (const file of files) {
       try {
         const content = JSON.parse(fs.readFileSync(path.join(cacheDir, file), 'utf8'));
@@ -283,7 +320,10 @@ ipcMain.handle('check-kubelogin-auth', async () => {
           const parts = token.split('.');
           if (parts.length === 3) {
             const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
-            if (payload.exp && payload.exp < now) return { ok: false };
+            if (payload.exp) {
+              if (payload.exp < now) return { ok: false };
+              anyValid = true;
+            }
           }
         }
       } catch { /* skip unreadable cache file */ }
@@ -344,6 +384,17 @@ ipcMain.handle('get-aks-credentials', async (_e, name, resourceGroup) => {
       `az aks get-credentials --name "${name}" --resource-group "${resourceGroup}" --file "${tmpFile}" --overwrite-existing`,
       { encoding: 'utf8', timeout: 30000, stdio: 'pipe' }
     );
+    // Convert exec plugin to azurecli login mode so kubelogin uses the Azure CLI
+    // token non-interactively. Without this, kubelogin defaults to device-code/browser auth.
+    try {
+      execSync(`kubelogin convert-kubeconfig -l azurecli --kubeconfig "${tmpFile}"`, {
+        encoding: 'utf8',
+        timeout: 10000,
+        stdio: 'pipe',
+      });
+    } catch {
+      // kubelogin not installed or conversion failed — proceed with original kubeconfig
+    }
     // Normalize: strip BOM + leading whitespace, then validate by parsing once
     const raw = fs.readFileSync(tmpFile, 'utf8').replace(/^﻿/, '').trimStart();
     const kc = new k8s.KubeConfig();
@@ -482,5 +533,30 @@ function buildKubeConfig(ref, contextName) {
     const exists = kc.getContexts().some((ctx) => ctx.name === contextName);
     if (exists) kc.setCurrentContext(contextName);
   }
+
+  // Patch ExecAuth to use spawnSync with a timeout.
+  // The default execFn is child_process.spawnSync with no timeout — if kubelogin
+  // hangs waiting for browser auth it blocks the entire Node.js event loop forever.
+  const execAuth = kc.authenticators && kc.authenticators.find(
+    (a) => a.constructor && a.constructor.name === 'ExecAuth'
+  );
+  if (execAuth && execAuth.execFn) {
+    const origExecFn = execAuth.execFn;
+    execAuth.execFn = (command, args, opts) => {
+      const result = origExecFn(command, args, { ...opts, timeout: 15000 });
+      if (result.error && result.error.code === 'ETIMEDOUT') {
+        return {
+          status: 1,
+          stdout: Buffer.from(''),
+          stderr: Buffer.from(
+            'kubelogin timed out after 15s — token may be expired. Run: kubelogin convert-kubeconfig -l azurecli'
+          ),
+          signal: result.signal,
+        };
+      }
+      return result;
+    };
+  }
+
   return kc;
 }
