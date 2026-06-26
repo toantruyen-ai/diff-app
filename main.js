@@ -35,12 +35,12 @@ if (app.isPackaged) {
   }
 }
 
-// When launched as a packaged .app on macOS, the process inherits a bare PATH
-// (/usr/bin:/bin:/usr/sbin:/sbin) — kubelogin/kubectl plugins are not found.
-// Spawn a login shell once to read the user's real PATH and inject it.
-if (process.platform === 'darwin' && app.isPackaged) {
+// When launched as a packaged app, the process inherits a bare PATH and
+// kubelogin/kubectl plugins are not found. Spawn a login shell once to
+// read the user's real PATH and inject it. Applies to macOS and Linux.
+if ((process.platform === 'darwin' || process.platform === 'linux') && app.isPackaged) {
   try {
-    const shell = process.env.SHELL || '/bin/zsh';
+    const shell = process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash');
     const shellPath = execSync(`${shell} -l -c 'echo $PATH'`, {
       encoding: 'utf8',
       timeout: 3000,
@@ -49,10 +49,13 @@ if (process.platform === 'darwin' && app.isPackaged) {
   } catch {
     // Fallback: prepend common kubelogin install locations
     const home = os.homedir();
+    const extra = process.platform === 'darwin'
+      ? ['/opt/homebrew/bin']
+      : ['/usr/bin', '/snap/bin'];
     process.env.PATH = [
       `${home}/.krew/bin`,
-      '/opt/homebrew/bin',
       '/usr/local/bin',
+      ...extra,
       process.env.PATH,
     ].join(':');
   }
