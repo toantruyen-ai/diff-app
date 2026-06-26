@@ -290,48 +290,33 @@ ipcMain.handle('check-azure-auth', async () => {
 });
 
 ipcMain.handle('check-kubelogin-auth', async () => {
-  // First try to find kubelogin binary
-  try {
-    execSync('which kubelogin || command -v kubelogin', { encoding: 'utf8', timeout: 3000, stdio: 'pipe' });
-  } catch {
-    // kubelogin not installed — skip check, k8s client will fail naturally
-    return { ok: true };
-  }
-
-  // Check cache for expired tokens
+  // We always convert AKS kubeconfigs to azurecli login mode, which reads tokens
+  // directly from Azure CLI and does not use this cache directory.
+  // Stale cache files from old non-azurecli sessions would cause false positives,
+  // so we clean them up and skip the check — Azure CLI auth (check-azure-auth) is sufficient.
   const cacheDir = path.join(os.homedir(), '.kube', 'cache', 'kubelogin');
   try {
-    if (!fs.existsSync(cacheDir)) {
-      // No cache at all — tokens haven't been fetched yet, likely needs login
-      return { ok: false };
-    }
-    const files = fs.readdirSync(cacheDir).filter((f) => f.endsWith('.json'));
-    if (files.length === 0) {
-      // Cache dir exists but empty — needs login
-      return { ok: false };
-    }
-    const now = Math.floor(Date.now() / 1000);
-    let anyValid = false;
-    for (const file of files) {
-      try {
-        const content = JSON.parse(fs.readFileSync(path.join(cacheDir, file), 'utf8'));
-        const token = content.accessToken || content.access_token;
-        if (token) {
-          const parts = token.split('.');
-          if (parts.length === 3) {
-            const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
-            if (payload.exp) {
-              if (payload.exp < now) return { ok: false };
-              anyValid = true;
+    if (fs.existsSync(cacheDir)) {
+      const now = Math.floor(Date.now() / 1000);
+      for (const file of fs.readdirSync(cacheDir).filter((f) => f.endsWith('.json'))) {
+        try {
+          const filePath = path.join(cacheDir, file);
+          const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+          const token = content.accessToken || content.access_token;
+          if (token) {
+            const parts = token.split('.');
+            if (parts.length === 3) {
+              const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+              if (payload.exp && payload.exp < now) {
+                try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+              }
             }
           }
-        }
-      } catch { /* skip unreadable cache file */ }
+        } catch { /* skip unreadable cache file */ }
+      }
     }
-    return { ok: true };
-  } catch {
-    return { ok: true };
-  }
+  } catch { /* ignore */ }
+  return { ok: true };
 });
 
 ipcMain.handle('az-login', async () => {
