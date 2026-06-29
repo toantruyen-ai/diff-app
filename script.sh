@@ -1,4 +1,4 @@
-VERSION=1.0.13
+VERSION=1.0.14
 npm version $VERSION --no-git-tag-version
 git add package.json
 git commit -m "chore: bump version to $VERSION"
