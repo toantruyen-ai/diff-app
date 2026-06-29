@@ -285,7 +285,7 @@ ipcMain.handle('get-token-expiry', async () => {
 
 ipcMain.handle('check-azure-auth', async () => {
   try {
-    execSync('az account show --output none', { encoding: 'utf8', timeout: 8000, stdio: 'pipe' });
+    execSync('az account get-access-token --output none', { encoding: 'utf8', timeout: 8000, stdio: 'pipe' });
     return { ok: true };
   } catch {
     return { ok: false };
