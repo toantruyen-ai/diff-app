@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+- Lịch sử thay đổi → `CHANGELOG.md` (cập nhật sau mỗi session)
+
 ## Commands
 
 ```bash
@@ -49,3 +51,8 @@ The cascade selectors (context → namespace → deployment) reset downstream dr
 ### Namespace fallback
 
 `load-namespaces` first tries a cluster-wide `listNamespace()` call. If that fails (e.g. RBAC 403), it falls back to extracting unique `context.namespace` values from the kubeconfig contexts.
+
+## MCP & context
+
+- Ưu tiên `serena` MCP để tìm symbol/định nghĩa thay vì đọc nhiều file thô; chỉ đọc full file
+  khi summary không đủ.
