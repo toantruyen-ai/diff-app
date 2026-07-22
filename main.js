@@ -88,6 +88,12 @@ function createWindow() {
     // Check for updates 5 s after window is visible to not block startup
     if (autoUpdater) setTimeout(() => autoUpdater.checkForUpdates().catch(() => { }), 5000);
   });
+  mainWindow.on('closed', () => {
+    // Pod log streams hold an open HTTP request to the cluster — abort them all,
+    // otherwise they keep running (and keep the process alive) after the window is gone.
+    for (const sid of logSessions.keys()) stopLogSession(sid);
+    mainWindow = null;
+  });
 }
 
 app.whenReady().then(() => {
@@ -494,6 +500,235 @@ ipcMain.handle('list-servicebus-queues', async (_e, namespaces) => {
     }
   }));
   return results;
+});
+
+// ── K8s Manage: resource listing ─────────────────────────────────────────────
+
+const MANAGE_KINDS = ['pods', 'deployments', 'statefulsets', 'daemonsets', 'services', 'configmaps', 'secrets', 'nodes', 'events'];
+
+function ageOf(ts) {
+  return ts ? new Date(ts).toISOString() : null;
+}
+
+function podStatus(pod) {
+  const statuses = pod.status?.containerStatuses || [];
+  const waiting = statuses.find((s) => s.state && s.state.waiting);
+  if (waiting) return waiting.state.waiting.reason || 'Waiting';
+  const badTerminated = statuses.find(
+    (s) => s.state && s.state.terminated && s.state.terminated.reason && s.state.terminated.reason !== 'Completed'
+  );
+  if (badTerminated) return badTerminated.state.terminated.reason;
+  return pod.status?.phase || 'Unknown';
+}
+
+// Project full API objects down to the small set of fields the table/drawer need —
+// keeps IPC payloads small and lets one handler cover every resource kind.
+function projectRow(kind, item) {
+  const meta = item.metadata || {};
+  switch (kind) {
+    case 'pods': {
+      const statuses = item.status?.containerStatuses || [];
+      const restarts = statuses.reduce((sum, s) => sum + (s.restartCount || 0), 0);
+      return {
+        name: meta.name,
+        ready: `${statuses.filter((s) => s.ready).length}/${statuses.length}`,
+        status: podStatus(item),
+        restarts,
+        node: item.spec?.nodeName || '',
+        age: ageOf(meta.creationTimestamp),
+        containers: (item.spec?.containers || []).map((c) => c.name),
+      };
+    }
+    case 'deployments': {
+      const spec = item.spec || {};
+      const status = item.status || {};
+      return {
+        name: meta.name,
+        ready: `${status.readyReplicas || 0}/${spec.replicas ?? 0}`,
+        upToDate: status.updatedReplicas || 0,
+        available: status.availableReplicas || 0,
+        age: ageOf(meta.creationTimestamp),
+      };
+    }
+    case 'statefulsets': {
+      const spec = item.spec || {};
+      const status = item.status || {};
+      return {
+        name: meta.name,
+        ready: `${status.readyReplicas || 0}/${spec.replicas ?? 0}`,
+        age: ageOf(meta.creationTimestamp),
+      };
+    }
+    case 'daemonsets': {
+      const status = item.status || {};
+      return {
+        name: meta.name,
+        desired: status.desiredNumberScheduled || 0,
+        current: status.currentNumberScheduled || 0,
+        ready: status.numberReady || 0,
+        age: ageOf(meta.creationTimestamp),
+      };
+    }
+    case 'services': {
+      const spec = item.spec || {};
+      const lbIngress = (item.status?.loadBalancer?.ingress || []).map((i) => i.ip || i.hostname);
+      const ports = (spec.ports || [])
+        .map((p) => `${p.port}${p.nodePort ? `:${p.nodePort}` : ''}/${p.protocol}`)
+        .join(', ');
+      return {
+        name: meta.name,
+        type: spec.type || 'ClusterIP',
+        clusterIp: spec.clusterIP || '',
+        externalIp: [...(spec.externalIPs || []), ...lbIngress].join(', '),
+        ports,
+        age: ageOf(meta.creationTimestamp),
+      };
+    }
+    case 'configmaps': {
+      return { name: meta.name, keys: Object.keys(item.data || {}).length, age: ageOf(meta.creationTimestamp) };
+    }
+    case 'secrets': {
+      return {
+        name: meta.name,
+        type: item.type || 'Opaque',
+        keys: Object.keys(item.data || {}).length,
+        age: ageOf(meta.creationTimestamp),
+      };
+    }
+    case 'nodes': {
+      const conditions = item.status?.conditions || [];
+      const readyCond = conditions.find((c) => c.type === 'Ready');
+      const roles = Object.keys(meta.labels || {})
+        .filter((l) => l.startsWith('node-role.kubernetes.io/'))
+        .map((l) => l.replace('node-role.kubernetes.io/', ''));
+      return {
+        name: meta.name,
+        status: readyCond && readyCond.status === 'True' ? 'Ready' : 'NotReady',
+        roles: roles.length ? roles.join(',') : '<none>',
+        version: item.status?.nodeInfo?.kubeletVersion || '',
+        age: ageOf(meta.creationTimestamp),
+      };
+    }
+    case 'events': {
+      return {
+        name: meta.name,
+        type: item.type || '',
+        reason: item.reason || '',
+        object: item.involvedObject ? `${item.involvedObject.kind}/${item.involvedObject.name}` : '',
+        message: item.message || '',
+        age: ageOf(item.lastTimestamp || item.eventTime || meta.creationTimestamp),
+      };
+    }
+    default:
+      return { name: meta.name, age: ageOf(meta.creationTimestamp) };
+  }
+}
+
+ipcMain.handle('list-resource', async (_e, ref, contextName, namespace, kind) => {
+  if (!MANAGE_KINDS.includes(kind)) return { ok: false, error: `Unknown resource kind: ${kind}` };
+  try {
+    const kc = buildKubeConfig(ref, contextName);
+    const coreApi = kc.makeApiClient(k8s.CoreV1Api);
+    const appsApi = kc.makeApiClient(k8s.AppsV1Api);
+
+    let res;
+    switch (kind) {
+      case 'pods':         res = await withTimeout(coreApi.listNamespacedPod(namespace), 20000, 'Timed out listing pods'); break;
+      case 'deployments':  res = await withTimeout(appsApi.listNamespacedDeployment(namespace), 20000, 'Timed out listing deployments'); break;
+      case 'statefulsets': res = await withTimeout(appsApi.listNamespacedStatefulSet(namespace), 20000, 'Timed out listing statefulsets'); break;
+      case 'daemonsets':   res = await withTimeout(appsApi.listNamespacedDaemonSet(namespace), 20000, 'Timed out listing daemonsets'); break;
+      case 'services':     res = await withTimeout(coreApi.listNamespacedService(namespace), 20000, 'Timed out listing services'); break;
+      case 'configmaps':   res = await withTimeout(coreApi.listNamespacedConfigMap(namespace), 20000, 'Timed out listing configmaps'); break;
+      case 'secrets':      res = await withTimeout(coreApi.listNamespacedSecret(namespace), 20000, 'Timed out listing secrets'); break;
+      case 'nodes':        res = await withTimeout(coreApi.listNode(), 20000, 'Timed out listing nodes'); break;
+      case 'events':       res = await withTimeout(coreApi.listNamespacedEvent(namespace), 20000, 'Timed out listing events'); break;
+    }
+
+    const rows = (res.body.items || []).map((item) => projectRow(kind, item));
+    return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── K8s Manage: pod log streaming ────────────────────────────────────────────
+const { Writable } = require('stream');
+
+// sid -> { buffer, flushTimer, req }. One entry per open drawer log view.
+const logSessions = new Map();
+
+function stopLogSession(sid) {
+  const session = logSessions.get(sid);
+  if (!session) return;
+  clearInterval(session.flushTimer);
+  try { session.req && session.req.abort(); } catch { /* already closed */ }
+  logSessions.delete(sid);
+}
+
+ipcMain.handle('start-pod-logs', async (_e, ref, contextName, namespace, pod, container, opts, sid) => {
+  stopLogSession(sid);
+
+  const sendIfAlive = (channel, ...args) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
+  };
+
+  const session = { buffer: '', flushTimer: null, req: null };
+  logSessions.set(sid, session);
+
+  const MAX_BUFFER = 256 * 1024;
+  const writable = new Writable({
+    write(chunk, _enc, callback) {
+      session.buffer += chunk.toString('utf8');
+      if (session.buffer.length > MAX_BUFFER) {
+        session.buffer = `…(truncated — showing tail)…\n${session.buffer.slice(-MAX_BUFFER)}`;
+      }
+      callback();
+    },
+    final(callback) {
+      callback();
+      sendIfAlive(`pod-log-end:${sid}`);
+      stopLogSession(sid);
+    },
+  });
+
+  // Main does not send every chunk individually — coalesce into one flush per
+  // interval so a chatty container can't flood the renderer with IPC messages.
+  session.flushTimer = setInterval(() => {
+    if (!session.buffer) return;
+    const chunk = session.buffer;
+    session.buffer = '';
+    sendIfAlive(`pod-log-data:${sid}`, chunk);
+  }, 150);
+
+  try {
+    const kc = buildKubeConfig(ref, contextName);
+    const logApi = new k8s.Log(kc);
+    const req = await logApi.log(namespace, pod, container, writable, {
+      follow: opts?.follow !== false,
+      tailLines: opts?.tailLines,
+      timestamps: !!opts?.timestamps,
+    });
+    if (!logSessions.has(sid)) {
+      // stop-pod-logs was called while the connection was still opening
+      try { req.abort(); } catch { /* ignore */ }
+      return { ok: true };
+    }
+    session.req = req;
+    req.on('error', (err) => {
+      sendIfAlive(`pod-log-error:${sid}`, err.message);
+      stopLogSession(sid);
+    });
+    return { ok: true };
+  } catch (e) {
+    stopLogSession(sid);
+    sendIfAlive(`pod-log-error:${sid}`, e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('stop-pod-logs', async (_e, sid) => {
+  stopLogSession(sid);
+  return { ok: true };
 });
 
 // ── helpers ───────────────────────────────────────────────────────────────────

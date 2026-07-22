@@ -19,4 +19,25 @@ contextBridge.exposeInMainWorld('k8sApi', {
   kubeloginRefresh: () => ipcRenderer.invoke('kubelogin-refresh'),
   triggerUpdate: () => ipcRenderer.invoke('trigger-update'),
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_e, v) => cb(v)),
+
+  listResource: (ref, ctx, ns, kind) => ipcRenderer.invoke('list-resource', ref, ctx, ns, kind),
+
+  startPodLogs: (ref, ctx, ns, pod, container, opts, sid) =>
+    ipcRenderer.invoke('start-pod-logs', ref, ctx, ns, pod, container, opts, sid),
+  stopPodLogs: (sid) => ipcRenderer.invoke('stop-pod-logs', sid),
+  onPodLogData: (sid, cb) => {
+    const handler = (_e, chunk) => cb(chunk);
+    ipcRenderer.on(`pod-log-data:${sid}`, handler);
+    return () => ipcRenderer.removeListener(`pod-log-data:${sid}`, handler);
+  },
+  onPodLogEnd: (sid, cb) => {
+    const handler = () => cb();
+    ipcRenderer.on(`pod-log-end:${sid}`, handler);
+    return () => ipcRenderer.removeListener(`pod-log-end:${sid}`, handler);
+  },
+  onPodLogError: (sid, cb) => {
+    const handler = (_e, msg) => cb(msg);
+    ipcRenderer.on(`pod-log-error:${sid}`, handler);
+    return () => ipcRenderer.removeListener(`pod-log-error:${sid}`, handler);
+  },
 });

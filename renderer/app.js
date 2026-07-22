@@ -9,6 +9,16 @@ const state = {
   activeDepName: null,    // highlighted item in list view
   leftDeps: [],           // deployment names cached for list view
   rightDeps: new Set(),   // deployment names in B (for ✓/✗ badge)
+  manage: {
+    kubeconfig: null,     // file path, AKS kubeconfigId, or null (default kubeconfig)
+    context: null,
+    namespace: null,
+    resourceType: 'pods',
+    rows: [],
+    selected: null,       // row shown in the drawer
+    pollTimer: null,
+    logSession: null,     // { sid, disposers: [] }
+  },
 };
 
 /* ── DOM refs ────────────────────────────────────────────────────────────── */
@@ -98,6 +108,35 @@ const el = {
   thLeftLabel:    $('th-left-label'),
   thRightLabel:   $('th-right-label'),
   toggleMask:     $('toggle-mask'),
+
+  cardK8sManage:        $('card-k8s-manage'),
+  manageSelectView:     $('manage-select-view'),
+  manageClusterList:    $('manage-cluster-list'),
+  manageCsCount:        $('manage-cs-count'),
+  btnManageUseLocal:    $('btn-manage-use-local'),
+  btnManageContinue:    $('btn-manage-continue'),
+
+  manageView:           $('manage-view'),
+  manageSidebar:        $('manage-sidebar'),
+  manageHeader:         $('manage-header'),
+  manageContext:        $('manage-context'),
+  manageNamespace:      $('manage-namespace'),
+  manageSearch:         $('manage-search'),
+  manageRefreshStatus:  $('manage-refresh-status'),
+  manageBtnRefresh:     $('manage-btn-refresh'),
+  manageThead:          $('manage-thead'),
+  manageTbody:          $('manage-tbody'),
+  manageDrawer:         $('manage-drawer'),
+  manageDrawerTitle:    $('manage-drawer-title'),
+  manageDrawerClose:    $('manage-drawer-close'),
+  manageTabs:           document.querySelectorAll('.manage-tab'),
+  manageDetailPane:     $('manage-detail-pane'),
+  manageLogsPane:       $('manage-logs-pane'),
+  manageLogContainer:   $('manage-log-container'),
+  manageLogFollow:      $('manage-log-follow'),
+  manageLogTail:        $('manage-log-tail'),
+  manageLogClear:       $('manage-log-clear'),
+  manageLogOutput:      $('manage-log-output'),
 };
 
 /* ── Loading helpers ─────────────────────────────────────────────────────── */
@@ -545,9 +584,18 @@ const BACK_TARGETS = {
   'storage-diff-result':     'storage-select',
   'servicebus-select':       'home',
   'servicebus-diff-result':  'servicebus-select',
+  'manage-select':           'home',
+  'manage':                  'manage-select',
 };
 
 function showView(view) {
+  // Sole teardown choke point: leaving the manage workspace always stops its
+  // poller and any open log stream, so nothing keeps running in the background.
+  if (view !== 'manage') {
+    stopManagePolling();
+    stopManageLogs();
+  }
+
   el.homeView.style.display              = view === 'home'                   ? 'flex' : 'none';
   el.clusterSelectView.style.display     = view === 'cluster-select'         ? 'flex' : 'none';
   el.k8sDiffView.style.display           = view === 'k8s-diff'               ? 'flex' : 'none';
@@ -555,6 +603,8 @@ function showView(view) {
   el.storageDiffResultView.style.display = view === 'storage-diff-result'    ? 'flex' : 'none';
   el.servicebusSelectView.style.display  = view === 'servicebus-select'      ? 'flex' : 'none';
   el.servicebusResultView.style.display  = view === 'servicebus-diff-result' ? 'flex' : 'none';
+  el.manageSelectView.style.display      = view === 'manage-select'          ? 'flex' : 'none';
+  el.manageView.style.display            = view === 'manage'                ? 'flex' : 'none';
   el.btnBackHome.style.display           = view !== 'home'                   ? ''     : 'none';
   el.titlebarActions.style.display       = view === 'k8s-diff'               ? ''     : 'none';
   el.btnBackHome.dataset.target          = BACK_TARGETS[view] || 'home';
@@ -569,13 +619,39 @@ el.cardK8sDiff.addEventListener('click', () => {
   loadClusterList();
 });
 
+el.cardK8sManage.addEventListener('click', () => {
+  showView('manage-select');
+  loadManageClusterList();
+});
+
+window.addEventListener('beforeunload', () => {
+  stopManagePolling();
+  stopManageLogs();
+});
+
 /* ════════════════════════════════════════════════════════════════════════════
-   CLUSTER SELECTION
+   CLUSTER SELECTION — shared picker (K8s Diff picks 2, K8s Manage picks 1)
    ════════════════════════════════════════════════════════════════════════════ */
-let selectedClusters = [];
+const clusterDiffPicker = {
+  listEl: el.clusterList,
+  selected: [],
+  maxSelect: 2,
+  countEl: el.csCount,
+  actionBtn: el.btnCompareClusters,
+  countLabel: (n) => `${n} / 2 selected`,
+};
+
+const manageClusterPicker = {
+  listEl: el.manageClusterList,
+  selected: [],
+  maxSelect: 1,
+  countEl: el.manageCsCount,
+  actionBtn: el.btnManageContinue,
+  countLabel: (n) => `${n} / 1 selected`,
+};
 
 async function loadClusterList() {
-  selectedClusters = [];
+  clusterDiffPicker.selected.length = 0;
   el.clusterList.innerHTML = '<div class="cs-loading">Loading clusters…</div>';
   el.csCount.textContent = '0 / 2 selected';
   el.btnCompareClusters.disabled = true;
@@ -592,7 +668,7 @@ async function loadClusterList() {
     el.clusterList.innerHTML = '<div class="cs-empty">No clusters found with tag <code>diff=true</code></div>';
     return;
   }
-  renderClusterList(result.clusters);
+  renderClusterList(result.clusters, clusterDiffPicker);
 }
 
 function clusterKey(c) {
@@ -610,8 +686,11 @@ function envTagClass(env) {
   return 'env-other';
 }
 
-function renderClusterList(clusters) {
-  el.clusterList.innerHTML = '';
+// `picker` carries its own listEl/selected/maxSelect/countEl/actionBtn so the
+// same render/toggle/refresh trio serves both the 2-cluster diff picker and the
+// 1-cluster manage picker instead of duplicating this UI.
+function renderClusterList(clusters, picker) {
+  picker.listEl.innerHTML = '';
   for (const c of clusters) {
     const item = document.createElement('div');
     item.className = 'cluster-item';
@@ -630,63 +709,69 @@ function renderClusterList(clusters) {
       </div>
       <div class="ci-badge" style="visibility:hidden">A</div>
     `;
-    item.addEventListener('click', () => toggleCluster(item, c));
-    el.clusterList.appendChild(item);
+    item.addEventListener('click', () => toggleCluster(item, c, picker));
+    picker.listEl.appendChild(item);
   }
 }
 
-function toggleCluster(item, cluster) {
+function toggleCluster(item, cluster, picker) {
   const key = clusterKey(cluster);
-  const idx = selectedClusters.findIndex((c) => clusterKey(c) === key);
+  const idx = picker.selected.findIndex((c) => clusterKey(c) === key);
   if (idx >= 0) {
-    selectedClusters.splice(idx, 1);
+    picker.selected.splice(idx, 1);
   } else {
-    if (selectedClusters.length >= 2) return;
-    selectedClusters.push(cluster);
+    if (picker.selected.length >= picker.maxSelect) {
+      if (picker.maxSelect !== 1) return;
+      picker.selected.length = 0; // single-select: picking a new item replaces the old one
+    }
+    picker.selected.push(cluster);
   }
-  refreshClusterSelectionUI();
+  refreshClusterSelectionUI(picker);
 }
 
-function refreshClusterSelectionUI() {
-  const maxReached = selectedClusters.length >= 2;
-  el.clusterList.querySelectorAll('.cluster-item').forEach((item) => {
-    const idx = selectedClusters.findIndex((c) => clusterKey(c) === item.dataset.key);
+function refreshClusterSelectionUI(picker) {
+  const maxReached = picker.selected.length >= picker.maxSelect;
+  picker.listEl.querySelectorAll('.cluster-item').forEach((item) => {
+    const idx = picker.selected.findIndex((c) => clusterKey(c) === item.dataset.key);
     const badge = item.querySelector('.ci-badge');
     item.classList.remove('ci-selected-a', 'ci-selected-b', 'ci-max-reached');
     badge.style.visibility = 'hidden';
     if (idx === 0) {
       item.classList.add('ci-selected-a');
-      badge.textContent = 'A';
-      badge.style.visibility = '';
+      if (picker.maxSelect > 1) {
+        badge.textContent = 'A';
+        badge.style.visibility = '';
+      }
     } else if (idx === 1) {
       item.classList.add('ci-selected-b');
       badge.textContent = 'B';
       badge.style.visibility = '';
-    } else if (maxReached) {
+    } else if (maxReached && picker.maxSelect > 1) {
       item.classList.add('ci-max-reached');
     }
   });
-  el.csCount.textContent = `${selectedClusters.length} / 2 selected`;
-  el.btnCompareClusters.disabled = selectedClusters.length !== 2;
+  picker.countEl.textContent = picker.countLabel(picker.selected.length);
+  picker.actionBtn.disabled = picker.selected.length !== picker.maxSelect;
 }
 
 el.btnCompareClusters.addEventListener('click', async () => {
-  if (selectedClusters.length !== 2) return;
+  const [a, b] = clusterDiffPicker.selected;
+  if (clusterDiffPicker.selected.length !== 2) return;
   el.btnCompareClusters.disabled = true;
 
   try {
-    showLoading(`Getting credentials for ${selectedClusters[0].name}…`);
-    const credA = await window.k8sApi.getAksCredentials(selectedClusters[0].name, selectedClusters[0].resourceGroup);
-    if (!credA.ok) throw new Error(`Cannot get credentials for ${selectedClusters[0].name}: ${credA.error}`);
+    showLoading(`Getting credentials for ${a.name}…`);
+    const credA = await window.k8sApi.getAksCredentials(a.name, a.resourceGroup);
+    if (!credA.ok) throw new Error(`Cannot get credentials for ${a.name}: ${credA.error}`);
 
-    showLoading(`Getting credentials for ${selectedClusters[1].name}…`);
-    const credB = await window.k8sApi.getAksCredentials(selectedClusters[1].name, selectedClusters[1].resourceGroup);
-    if (!credB.ok) throw new Error(`Cannot get credentials for ${selectedClusters[1].name}: ${credB.error}`);
+    showLoading(`Getting credentials for ${b.name}…`);
+    const credB = await window.k8sApi.getAksCredentials(b.name, b.resourceGroup);
+    if (!credB.ok) throw new Error(`Cannot get credentials for ${b.name}: ${credB.error}`);
 
     hideLoading();
     await initAksPanels(
-      { ...selectedClusters[0], kubeconfigId: credA.kubeconfigId },
-      { ...selectedClusters[1], kubeconfigId: credB.kubeconfigId }
+      { ...a, kubeconfigId: credA.kubeconfigId },
+      { ...b, kubeconfigId: credB.kubeconfigId }
     );
     showView('k8s-diff');
   } catch (e) {
@@ -1135,6 +1220,450 @@ function renderServiceBusDiffTable(results) {
   sbdrSearch = '';
   el.sbdrSearch.value = '';
   el.sbdrFilterBtns.forEach((b) => b.classList.toggle('active', b.dataset.sbdrFilter === 'all'));
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   K8S MANAGE — entry flow (cluster picker → context/namespace)
+   ════════════════════════════════════════════════════════════════════════════ */
+async function loadManageClusterList() {
+  manageClusterPicker.selected.length = 0;
+  el.manageClusterList.innerHTML = '<div class="cs-loading">Loading clusters…</div>';
+  el.manageCsCount.textContent = '0 / 1 selected';
+  el.btnManageContinue.disabled = true;
+
+  showLoading('Fetching AKS clusters…');
+  const result = await window.k8sApi.listAksClusters();
+  hideLoading();
+
+  if (!result.ok) {
+    el.manageClusterList.innerHTML = `<div class="cs-error">Failed to load clusters:<br>${escHtml(result.error)}</div>`;
+    return;
+  }
+  if (result.clusters.length === 0) {
+    el.manageClusterList.innerHTML = '<div class="cs-empty">No clusters found with tag <code>diff=true</code></div>';
+    return;
+  }
+  renderClusterList(result.clusters, manageClusterPicker);
+}
+
+el.btnManageUseLocal.addEventListener('click', () => enterManageWorkspace(null));
+
+el.btnManageContinue.addEventListener('click', async () => {
+  if (manageClusterPicker.selected.length !== 1) return;
+  const cluster = manageClusterPicker.selected[0];
+  el.btnManageContinue.disabled = true;
+
+  try {
+    showLoading(`Getting credentials for ${cluster.name}…`);
+    const cred = await window.k8sApi.getAksCredentials(cluster.name, cluster.resourceGroup);
+    if (!cred.ok) throw new Error(`Cannot get credentials for ${cluster.name}: ${cred.error}`);
+    hideLoading();
+    await enterManageWorkspace(cred.kubeconfigId);
+  } catch (e) {
+    hideLoading();
+    alert(e.message);
+    el.btnManageContinue.disabled = false;
+  }
+});
+
+async function enterManageWorkspace(kubeconfigRef) {
+  const data = state.manage;
+  data.kubeconfig = kubeconfigRef;
+  data.context = null;
+  data.namespace = null;
+  data.resourceType = 'pods';
+  data.rows = [];
+  data.selected = null;
+
+  el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === 'pods'));
+  el.manageContext.innerHTML = '<option value="">— select context —</option>';
+  el.manageNamespace.innerHTML = '<option value="">— select namespace —</option>';
+  el.manageNamespace.disabled = true;
+  el.manageSearch.value = '';
+  closeManageDrawer();
+
+  showView('manage');
+  el.btnManageContinue.disabled = false;
+  await loadManageContexts();
+}
+
+async function loadManageContexts() {
+  const data = state.manage;
+  try {
+    showLoading('Loading contexts…');
+    const contexts = await window.k8sApi.loadContexts(data.kubeconfig);
+    populateSelect(el.manageContext, contexts, '— select context —');
+    el.manageContext.disabled = contexts.length === 0;
+    if (contexts.length === 1) {
+      el.manageContext.value = contexts[0];
+      data.context = contexts[0];
+      await loadManageNamespaces();
+    }
+  } catch (e) {
+    alert(`Failed to load contexts: ${e.message}`);
+  } finally {
+    hideLoading();
+  }
+}
+
+async function loadManageNamespaces() {
+  const data = state.manage;
+  try {
+    showLoading('Loading namespaces…');
+    const ns = await window.k8sApi.loadNamespaces(data.kubeconfig, data.context);
+    populateSelect(el.manageNamespace, ns, '— select namespace —');
+    el.manageNamespace.disabled = false;
+
+    const defaultNs = ns.includes('brand') ? 'brand' : (ns.length === 1 ? ns[0] : null);
+    if (defaultNs) {
+      el.manageNamespace.value = defaultNs;
+      data.namespace = defaultNs;
+      refreshManageResources();
+      startManagePolling();
+    }
+  } catch (e) {
+    alert(`Failed to load namespaces: ${e.message}`);
+  } finally {
+    hideLoading();
+  }
+}
+
+el.manageContext.addEventListener('change', async () => {
+  const data = state.manage;
+  data.context = el.manageContext.value || null;
+  data.namespace = null;
+  el.manageNamespace.innerHTML = '<option value="">— select namespace —</option>';
+  el.manageNamespace.disabled = true;
+  stopManagePolling();
+  closeManageDrawer();
+  renderManageTable(data.resourceType, []);
+  if (data.context) await loadManageNamespaces();
+});
+
+el.manageNamespace.addEventListener('change', () => {
+  const data = state.manage;
+  data.namespace = el.manageNamespace.value || null;
+  stopManagePolling();
+  closeManageDrawer();
+  if (data.namespace) {
+    refreshManageResources();
+    startManagePolling();
+  } else {
+    renderManageTable(data.resourceType, []);
+  }
+});
+
+el.manageSearch.addEventListener('input', () => renderManageTable(state.manage.resourceType, state.manage.rows));
+el.manageBtnRefresh.addEventListener('click', () => refreshManageResources());
+
+/* ════════════════════════════════════════════════════════════════════════════
+   K8S MANAGE — resource table + polling
+   ════════════════════════════════════════════════════════════════════════════ */
+const MANAGE_COLUMN_DEFS = {
+  pods: [
+    { key: 'name', label: 'Name' },
+    { key: 'ready', label: 'Ready' },
+    { key: 'status', label: 'Status', status: true },
+    { key: 'restarts', label: 'Restarts' },
+    { key: 'node', label: 'Node' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  deployments: [
+    { key: 'name', label: 'Name' },
+    { key: 'ready', label: 'Ready' },
+    { key: 'upToDate', label: 'Up-to-date' },
+    { key: 'available', label: 'Available' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  statefulsets: [
+    { key: 'name', label: 'Name' },
+    { key: 'ready', label: 'Ready' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  daemonsets: [
+    { key: 'name', label: 'Name' },
+    { key: 'desired', label: 'Desired' },
+    { key: 'current', label: 'Current' },
+    { key: 'ready', label: 'Ready' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  services: [
+    { key: 'name', label: 'Name' },
+    { key: 'type', label: 'Type' },
+    { key: 'clusterIp', label: 'Cluster IP' },
+    { key: 'externalIp', label: 'External IP' },
+    { key: 'ports', label: 'Ports' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  configmaps: [
+    { key: 'name', label: 'Name' },
+    { key: 'keys', label: 'Keys' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  secrets: [
+    { key: 'name', label: 'Name' },
+    { key: 'type', label: 'Type' },
+    { key: 'keys', label: 'Keys' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  nodes: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', status: true },
+    { key: 'roles', label: 'Roles' },
+    { key: 'version', label: 'Version' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  events: [
+    { key: 'type', label: 'Type' },
+    { key: 'reason', label: 'Reason' },
+    { key: 'object', label: 'Object' },
+    { key: 'message', label: 'Message' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+};
+
+// Nodes/Events change slowly and are usually shared across many namespaces —
+// polling them as often as pods just adds load for no benefit.
+const MANAGE_POLL_INTERVAL = { nodes: 10000, events: 10000 };
+
+function relAge(ts) {
+  if (!ts) return '';
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(ts).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+function manageStatusClass(status) {
+  const s = (status || '').toLowerCase();
+  if (s === 'running' || s === 'ready' || s === 'completed' || s === 'succeeded') return 'manage-status-running';
+  if (s === 'pending' || s === 'containercreating') return 'manage-status-pending';
+  return 'manage-status-error'; // CrashLoopBackOff, Error, ImagePullBackOff, NotReady, …
+}
+
+el.manageSidebar.addEventListener('click', (e) => {
+  const btn = e.target.closest('.manage-nav-item');
+  if (!btn) return;
+  selectManageKind(btn.dataset.kind);
+});
+
+function selectManageKind(kind) {
+  const data = state.manage;
+  if (kind === data.resourceType) return;
+  data.resourceType = kind;
+  data.rows = [];
+  el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === kind));
+  closeManageDrawer();
+  stopManagePolling();
+  if (data.context && data.namespace) {
+    refreshManageResources();
+    startManagePolling();
+  } else {
+    renderManageTable(kind, []);
+  }
+}
+
+function renderManageTable(kind, rows) {
+  const cols = MANAGE_COLUMN_DEFS[kind] || MANAGE_COLUMN_DEFS.pods;
+  const query = (el.manageSearch.value || '').toLowerCase();
+  const filtered = query ? rows.filter((r) => (r.name || '').toLowerCase().includes(query)) : rows;
+
+  el.manageThead.innerHTML = `<tr>${cols.map((c) => `<th>${escHtml(c.label)}</th>`).join('')}</tr>`;
+
+  if (filtered.length === 0) {
+    el.manageTbody.innerHTML = `<tr><td colspan="${cols.length}" class="manage-empty">${query ? 'No match' : 'No resources found'}</td></tr>`;
+    return;
+  }
+
+  el.manageTbody.innerHTML = '';
+  for (const row of filtered) {
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    tr.innerHTML = cols.map((c) => {
+      const val = row[c.key];
+      if (c.age) return `<td>${escHtml(relAge(val))}</td>`;
+      if (c.status) return `<td><span class="status-pill ${manageStatusClass(val)}">${escHtml(val || '')}</span></td>`;
+      return `<td>${escHtml(val ?? '')}</td>`;
+    }).join('');
+    tr.addEventListener('click', () => openManageDrawer(kind, row));
+    el.manageTbody.appendChild(tr);
+  }
+}
+
+function renderManageErrorRow(kind, error) {
+  const cols = MANAGE_COLUMN_DEFS[kind] || MANAGE_COLUMN_DEFS.pods;
+  el.manageThead.innerHTML = `<tr>${cols.map((c) => `<th>${escHtml(c.label)}</th>`).join('')}</tr>`;
+  el.manageTbody.innerHTML = `<tr><td colspan="${cols.length}" class="manage-empty">${escHtml(error)}</td></tr>`;
+}
+
+async function refreshManageResources() {
+  const data = state.manage;
+  if (!data.context || !data.namespace) return;
+  const kindAtStart = data.resourceType;
+  const nsAtStart = data.namespace;
+  el.manageRefreshStatus.textContent = 'Refreshing…';
+
+  try {
+    const result = await window.k8sApi.listResource(data.kubeconfig, data.context, nsAtStart, kindAtStart);
+    // Kind/namespace may have changed while this request was in flight — drop stale responses.
+    if (data.resourceType !== kindAtStart || data.namespace !== nsAtStart) return;
+
+    if (!result.ok) {
+      data.rows = [];
+      renderManageErrorRow(kindAtStart, result.error);
+      el.manageRefreshStatus.textContent = `Error at ${new Date().toLocaleTimeString()}`;
+      return;
+    }
+    data.rows = result.rows;
+    renderManageTable(kindAtStart, data.rows);
+    el.manageRefreshStatus.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    el.manageRefreshStatus.textContent = `Error: ${e.message}`;
+  }
+}
+
+function startManagePolling() {
+  stopManagePolling();
+  const interval = MANAGE_POLL_INTERVAL[state.manage.resourceType] || 5000;
+  state.manage.pollTimer = setInterval(refreshManageResources, interval);
+}
+
+function stopManagePolling() {
+  if (state.manage.pollTimer) {
+    clearInterval(state.manage.pollTimer);
+    state.manage.pollTimer = null;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   K8S MANAGE — drawer (detail + pod logs)
+   ════════════════════════════════════════════════════════════════════════════ */
+function openManageDrawer(kind, row) {
+  stopManageLogs();
+  state.manage.selected = row;
+  el.manageDrawer.classList.add('open');
+  el.manageDrawerTitle.textContent = row.name || '—';
+  renderManageDetail(kind, row);
+
+  const logsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="logs"]');
+  const isPod = kind === 'pods';
+  logsTabBtn.style.display = isPod ? '' : 'none';
+  if (isPod) populateManageLogContainerPicker(row.containers || []);
+
+  switchManageTab('detail');
+}
+
+function closeManageDrawer() {
+  stopManageLogs();
+  state.manage.selected = null;
+  el.manageDrawer.classList.remove('open');
+}
+
+el.manageDrawerClose.addEventListener('click', closeManageDrawer);
+
+function renderManageDetail(kind, row) {
+  const cols = MANAGE_COLUMN_DEFS[kind] || MANAGE_COLUMN_DEFS.pods;
+  el.manageDetailPane.innerHTML = cols.map((c) => {
+    const val = c.age ? relAge(row[c.key]) : row[c.key];
+    return `
+      <div class="manage-detail-row">
+        <span class="manage-detail-key">${escHtml(c.label)}</span>
+        <span class="manage-detail-value">${escHtml(val ?? '')}</span>
+      </div>`;
+  }).join('');
+}
+
+el.manageTabs.forEach((btn) => {
+  btn.addEventListener('click', () => switchManageTab(btn.dataset.tab));
+});
+
+function switchManageTab(tab) {
+  el.manageTabs.forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  el.manageDetailPane.style.display = tab === 'detail' ? '' : 'none';
+  el.manageLogsPane.style.display = tab === 'logs' ? 'flex' : 'none';
+  if (tab === 'logs') {
+    if (el.manageLogContainer.value) startManageLogs();
+  } else {
+    stopManageLogs();
+  }
+}
+
+function populateManageLogContainerPicker(containers) {
+  el.manageLogContainer.innerHTML = '';
+  containers.forEach((name) => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    el.manageLogContainer.appendChild(opt);
+  });
+  el.manageLogContainer.disabled = containers.length === 0;
+}
+
+el.manageLogContainer.addEventListener('change', () => {
+  if (el.manageLogsPane.style.display === 'flex') startManageLogs();
+});
+
+el.manageLogFollow.addEventListener('change', () => {
+  if (el.manageLogFollow.checked) el.manageLogOutput.scrollTop = el.manageLogOutput.scrollHeight;
+});
+
+el.manageLogClear.addEventListener('click', () => { el.manageLogOutput.textContent = ''; });
+
+// User scrolling away from the bottom while following turns follow-tail off —
+// scrolling back down does not turn it back on, matching Lens/kubectl-like UX.
+el.manageLogOutput.addEventListener('scroll', () => {
+  if (!el.manageLogFollow.checked) return;
+  const nearBottom = el.manageLogOutput.scrollHeight - el.manageLogOutput.scrollTop - el.manageLogOutput.clientHeight < 30;
+  if (!nearBottom) el.manageLogFollow.checked = false;
+});
+
+const MANAGE_LOG_MAX_LINES = 5000;
+
+function startManageLogs() {
+  stopManageLogs();
+  const data = state.manage;
+  const row = data.selected;
+  const container = el.manageLogContainer.value;
+  if (!row || !container) return;
+
+  const sid = crypto.randomUUID();
+  el.manageLogOutput.textContent = '';
+
+  // Subscribe before starting the stream so the first chunks can't race past us.
+  const disposers = [
+    window.k8sApi.onPodLogData(sid, (chunk) => appendLogBatch(chunk)),
+    window.k8sApi.onPodLogEnd(sid, () => appendLogBatch('\n[stream ended]\n')),
+    window.k8sApi.onPodLogError(sid, (msg) => appendLogBatch(`\n[error: ${msg}]\n`)),
+  ];
+  data.logSession = { sid, disposers };
+
+  const tailLines = parseInt(el.manageLogTail.value, 10) || 500;
+  window.k8sApi.startPodLogs(
+    data.kubeconfig, data.context, data.namespace, row.name, container,
+    { follow: true, tailLines, timestamps: false },
+    sid
+  );
+}
+
+function stopManageLogs() {
+  const session = state.manage.logSession;
+  if (!session) return;
+  window.k8sApi.stopPodLogs(session.sid);
+  session.disposers.forEach((dispose) => dispose());
+  state.manage.logSession = null;
+}
+
+function appendLogBatch(text) {
+  const shouldFollow = el.manageLogFollow.checked;
+  el.manageLogOutput.textContent += text;
+  const lines = el.manageLogOutput.textContent.split('\n');
+  if (lines.length > MANAGE_LOG_MAX_LINES) {
+    el.manageLogOutput.textContent = lines.slice(-MANAGE_LOG_MAX_LINES).join('\n');
+  }
+  if (shouldFollow) el.manageLogOutput.scrollTop = el.manageLogOutput.scrollHeight;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

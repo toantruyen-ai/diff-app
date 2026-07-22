@@ -86,6 +86,21 @@
             environments</div>
         </button>
 
+        <button class="tool-card" id="card-k8s-manage">
+          <div class="tool-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+              stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7" rx="1" />
+              <rect x="14" y="3" width="7" height="7" rx="1" />
+              <rect x="3" y="14" width="7" height="7" rx="1" />
+              <rect x="14" y="14" width="7" height="7" rx="1" />
+            </svg>
+          </div>
+          <div class="tool-card-title">K8s Manage</div>
+          <div class="tool-card-desc">Browse cluster resources, tail pod logs — a lightweight Lens-style view for one
+            cluster at a time</div>
+        </button>
+
       </div>
     </div>
 
@@ -378,6 +393,98 @@
           <tbody id="sdr-body"></tbody>
         </table>
       </div>
+    </div>
+
+    <!-- ── K8s Manage: cluster selection view ─────────────────────────────── -->
+    <div id="manage-select-view" class="cluster-select-view" style="display:none">
+      <div class="cs-header">
+        <div class="cs-title">Select a Cluster to Manage</div>
+        <p class="cs-hint">Choose 1 cluster tagged <code>diff=true</code>, or use your local kubeconfig</p>
+      </div>
+      <div id="manage-cluster-list" class="cluster-list"></div>
+      <div class="cs-footer">
+        <span id="manage-cs-count" class="cs-count">0 / 1 selected</span>
+        <div class="cs-footer-actions">
+          <button id="btn-manage-use-local" class="btn btn-ghost">Use local kubeconfig</button>
+          <button id="btn-manage-continue" class="btn btn-primary" disabled>
+            Continue
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── K8s Manage: workspace ───────────────────────────────────────────── -->
+    <div id="manage-view" class="manage-view" style="display:none">
+      <aside id="manage-sidebar" class="manage-sidebar">
+        <button class="manage-nav-item active" data-kind="pods">Pods</button>
+        <button class="manage-nav-item" data-kind="deployments">Deployments</button>
+        <button class="manage-nav-item" data-kind="statefulsets">StatefulSets</button>
+        <button class="manage-nav-item" data-kind="daemonsets">DaemonSets</button>
+        <button class="manage-nav-item" data-kind="services">Services</button>
+        <button class="manage-nav-item" data-kind="configmaps">ConfigMaps</button>
+        <button class="manage-nav-item" data-kind="secrets">Secrets</button>
+        <button class="manage-nav-item" data-kind="nodes">Nodes</button>
+        <button class="manage-nav-item" data-kind="events">Events</button>
+      </aside>
+
+      <section class="manage-main">
+        <header id="manage-header" class="manage-header">
+          <div class="field-group">
+            <label>Context</label>
+            <select id="manage-context" disabled>
+              <option value="">— select context —</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Namespace</label>
+            <select id="manage-namespace" disabled>
+              <option value="">— select namespace —</option>
+            </select>
+          </div>
+          <div class="field-group manage-search-group">
+            <label>Filter</label>
+            <input type="text" id="manage-search" placeholder="Filter by name…" />
+          </div>
+          <div class="manage-header-status">
+            <span id="manage-refresh-status" class="manage-refresh-status"></span>
+            <button id="manage-btn-refresh" class="btn btn-sm">↻ Refresh</button>
+          </div>
+        </header>
+
+        <div id="manage-table-wrap" class="sdr-table-wrap">
+          <table class="sdr-table">
+            <thead id="manage-thead"></thead>
+            <tbody id="manage-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside id="manage-drawer" class="manage-drawer">
+        <header class="manage-drawer-header">
+          <span id="manage-drawer-title" class="manage-drawer-title">—</span>
+          <button id="manage-drawer-close" class="btn btn-ghost btn-xs">✕</button>
+        </header>
+        <nav class="manage-drawer-tabs">
+          <button class="manage-tab active" data-tab="detail">Detail</button>
+          <button class="manage-tab" data-tab="logs">Logs</button>
+        </nav>
+        <div id="manage-detail-pane" class="manage-detail-pane"></div>
+        <div id="manage-logs-pane" class="manage-logs-pane" style="display:none">
+          <div class="manage-log-toolbar">
+            <select id="manage-log-container"></select>
+            <label class="manage-log-follow-label">
+              <input type="checkbox" id="manage-log-follow" checked /> Follow
+            </label>
+            <input type="number" id="manage-log-tail" value="500" min="1" title="Tail lines" />
+            <button id="manage-log-clear" class="btn btn-xs btn-ghost">Clear</button>
+          </div>
+          <pre id="manage-log-output" class="manage-log-output"></pre>
+        </div>
+      </aside>
     </div>
 
     <!-- Auth overlay -->
