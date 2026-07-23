@@ -9,19 +9,46 @@ const state = {
   activeDepName: null,    // highlighted item in list view
   leftDeps: [],           // deployment names cached for list view
   rightDeps: new Set(),   // deployment names in B (for ✓/✗ badge)
+  diffTab: 'env',         // 'env' | 'manifest' — which pane is active in the k8s-diff view
+  compareTarget: null,    // { left:{kubeconfig,context,namespace,deployment}, right:{...}|null } — the identity actually being compared (select-mode or list-mode)
+  manifest: { leftYaml: null, rightYaml: null, hideStatus: true, key: null }, // Full Manifest tab cache — derived per-comparison, not connection identity
   manage: {
     kubeconfig: null,     // file path, AKS kubeconfigId, or null (default kubeconfig)
     context: null,
     namespace: null,
-    resourceType: 'pods',
+    resourceType: 'overview',
     rows: [],
     selected: null,       // row shown in the drawer
     pollTimer: null,
     logSession: null,     // { sid, disposers: [] }
     execSession: null,    // { sid, term, fitAddon, resizeObserver, dataDisposable, disposers }
-    metricsSeries: new Map(),  // name -> ring buffer [{t,cpu(millicores),mem(bytes)}], point-in-time samples
+    metricsSeries: new Map(),  // "namespace/name" -> ring buffer [{t,cpu(millicores),mem(bytes)}], point-in-time samples
     metricsPollTimer: null,
     metricsAvailable: true,    // false once metrics-server proves unreachable — stops polling until kind/ns/context changes
+    portForwards: new Map(),  // sid -> { sid, pod, targetPort, localPort, disposer } — persist across tabs/rows until stopped or view left
+    revealSecrets: false,      // Secret YAML reveal toggle — reset on every drawer open/close, never carries across rows
+    selection: new Set(),     // bulk-select: keys of `${namespace}::${name}` for the currently checked rows
+    mode: 'kind',              // 'kind' (built-in MANAGE_KINDS) | 'crd' (dynamic custom resources)
+    crds: [],                  // [{name, group, version, plural, kind, namespaced}] — populated per-context
+    activeCrd: null,           // the CRD currently being browsed, when mode === 'crd'
+    enableMetrics: false,      // toggle CPU/Memory column display and polling
+    enableAutoRefresh: false,  // toggle auto-refresh polling
+    menuVisibility: {
+      // Workloads — default ON for essentials
+      pods: true, deployments: true, statefulsets: false, daemonsets: false,
+      replicasets: false, jobs: false, cronjobs: false,
+      services: true, ingresses: false, configmaps: true, secrets: true,
+      hpas: false, nodes: true, pvs: false, namespaces: false, events: true,
+      // RBAC — default OFF
+      serviceaccounts: false, roles: false, rolebindings: false,
+      clusterroles: false, clusterrolebindings: false,
+      // Policy & Storage — default OFF
+      networkpolicies: false, storageclasses: false, resourcequotas: false,
+      limitranges: false, pvcs: false,
+      // Custom Resources — default OFF
+      _crd: false,
+    },
+    overviewPollTimer: null,
   },
 };
 
@@ -128,13 +155,29 @@ const el = {
   manageSearch:         $('manage-search'),
   manageRefreshStatus:  $('manage-refresh-status'),
   manageBtnRefresh:     $('manage-btn-refresh'),
+  manageSettingsBtn:    $('manage-settings-btn'),
+  manageSettingsPopover: $('manage-settings-popover'),
+  manageSettingMetrics: $('manage-setting-metrics'),
+  manageSettingAutoRefresh: $('manage-setting-autorefresh'),
+  manageTableWrap:      $('manage-table-wrap'),
   manageThead:          $('manage-thead'),
   manageTbody:          $('manage-tbody'),
   manageDrawer:         $('manage-drawer'),
   manageDrawerTitle:    $('manage-drawer-title'),
+  manageDrawerActions:  $('manage-drawer-actions'),
   manageDrawerClose:    $('manage-drawer-close'),
   manageTabs:           document.querySelectorAll('.manage-tab'),
   manageDetailPane:     $('manage-detail-pane'),
+  manageYamlPane:       $('manage-yaml-pane'),
+  manageYamlOutput:     $('manage-yaml-output'),
+  manageYamlCopy:       $('manage-yaml-copy'),
+  manageYamlRevealLabel: $('manage-yaml-reveal-label'),
+  manageYamlReveal:     $('manage-yaml-reveal'),
+  manageEventsPane:     $('manage-events-pane'),
+  manageEventsThead:    $('manage-events-thead'),
+  manageEventsTbody:    $('manage-events-tbody'),
+  manageAccessPane:     $('manage-access-pane'),
+  manageAccessTbody:    $('manage-access-tbody'),
   manageLogsPane:       $('manage-logs-pane'),
   manageLogContainer:   $('manage-log-container'),
   manageLogFollow:      $('manage-log-follow'),
@@ -145,7 +188,37 @@ const el = {
   manageExecContainer:  $('manage-exec-container'),
   manageExecStatus:     $('manage-exec-status'),
   manageTerm:           $('manage-term'),
+  managePfPane:         $('manage-pf-pane'),
+  managePfTargetPort:   $('manage-pf-target-port'),
+  managePfLocalPort:    $('manage-pf-local-port'),
+  managePfStart:        $('manage-pf-start'),
+  managePfList:         $('manage-pf-list'),
   manageMetricsPane:    $('manage-metrics-pane'),
+  manageConfirmOverlay: $('manage-confirm-overlay'),
+  manageConfirmTitle:   $('manage-confirm-title'),
+  manageConfirmBody:    $('manage-confirm-body'),
+  manageConfirmInput:   $('manage-confirm-input'),
+  manageConfirmCancel:  $('manage-confirm-cancel'),
+  manageConfirmOk:      $('manage-confirm-ok'),
+
+  manageKindTitle:      $('manage-kind-title'),
+  manageBulkBar:        $('manage-bulk-bar'),
+  manageBulkCount:      $('manage-bulk-count'),
+  manageBulkResult:     $('manage-bulk-result'),
+  manageSearchAllBtn:   $('manage-search-all-btn'),
+  manageSearchResults:      $('manage-search-results'),
+  manageSearchResultsTitle: $('manage-search-results-title'),
+  manageSearchResultsBody:  $('manage-search-results-body'),
+  manageSearchResultsClose: $('manage-search-results-close'),
+  manageOverviewPane:   $('manage-overview-pane'),
+  manageCrdFilter:      $('manage-crd-filter'),
+  manageCrdList:        $('manage-crd-list'),
+
+  diffViewTabs:         $('diff-view-tabs'),
+  envDiffPane:          $('env-diff-pane'),
+  manifestDiffPane:     $('manifest-diff-pane'),
+  manifestDiffHideStatus: $('manifest-diff-hide-status'),
+  manifestDiffOutput:   $('manifest-diff-output'),
 };
 
 /* ── Loading helpers ─────────────────────────────────────────────────────── */
@@ -395,6 +468,10 @@ async function listItemCompare(name, inB) {
 
     renderTable(leftEnvs, rightEnvs);
     el.filterBar.style.display = 'flex';
+    setCompareTarget(
+      { kubeconfig: l.kubeconfig, context: l.context, namespace: l.namespace, deployment: name },
+      inB ? { kubeconfig: r.kubeconfig, context: r.context, namespace: r.namespace, deployment: name } : null
+    );
   } catch (e) {
     alert(`Compare failed: ${e.message}`);
   } finally {
@@ -418,6 +495,10 @@ el.btnCompare.addEventListener('click', async () => {
     el.thRightLabel.textContent = `${state.right.deployment} (${state.right.namespace})`;
     renderTable(leftEnvs, rightEnvs);
     el.filterBar.style.display = 'flex';
+    setCompareTarget(
+      { kubeconfig: state.left.kubeconfig, context: state.left.context, namespace: state.left.namespace, deployment: state.left.deployment },
+      { kubeconfig: state.right.kubeconfig, context: state.right.context, namespace: state.right.namespace, deployment: state.right.deployment }
+    );
   } catch (e) {
     alert(`Compare failed: ${e.message}`);
   } finally {
@@ -444,6 +525,93 @@ el.btnClear.addEventListener('click', () => {
   el.emptyState.style.display = 'flex';
   el.filterBar.style.display  = 'none';
   el.diffBody.innerHTML = '';
+  state.compareTarget = null;
+  state.manifest = { leftYaml: null, rightYaml: null, hideStatus: el.manifestDiffHideStatus.checked, key: null };
+  switchDiffTab('env');
+});
+
+/* ════════════════════════════════════════════════════════════════════════════
+   FULL MANIFEST DIFF TAB (Phase 11) — reuses get-resource-yaml, no new IPC.
+   ════════════════════════════════════════════════════════════════════════════ */
+function setCompareTarget(left, right) {
+  state.compareTarget = { left, right };
+  state.manifest.leftYaml = null;
+  state.manifest.rightYaml = null;
+  state.manifest.key = null;
+  if (state.diffTab === 'manifest') loadManifestDiff();
+}
+
+el.diffViewTabs.addEventListener('click', (e) => {
+  const btn = e.target.closest('.manage-tab');
+  if (!btn) return;
+  switchDiffTab(btn.dataset.difftab);
+});
+
+function switchDiffTab(tab) {
+  state.diffTab = tab;
+  el.diffViewTabs.querySelectorAll('.manage-tab').forEach((b) => b.classList.toggle('active', b.dataset.difftab === tab));
+  el.envDiffPane.style.display = tab === 'env' ? '' : 'none';
+  el.manifestDiffPane.style.display = tab === 'manifest' ? 'flex' : 'none';
+  if (tab === 'manifest') loadManifestDiff();
+}
+
+function compareTargetKey(target) {
+  if (!target) return null;
+  const { left, right } = target;
+  const side = (s) => s ? `${s.kubeconfig || ''}/${s.context}/${s.namespace}/${s.deployment}` : 'none';
+  return `${side(left)}::${side(right)}`;
+}
+
+async function loadManifestDiff() {
+  const target = state.compareTarget;
+  if (!target) {
+    el.manifestDiffOutput.innerHTML = '<div class="manage-empty">Select deployments and click Compare first.</div>';
+    return;
+  }
+  const key = compareTargetKey(target);
+  if (state.manifest.key === key && state.manifest.leftYaml != null) {
+    renderManifestDiff();
+    return;
+  }
+  el.manifestDiffOutput.innerHTML = '<div class="manage-empty">Loading manifests…</div>';
+  const { left, right } = target;
+  const leftResult = await window.k8sApi.getResourceYaml(left.kubeconfig, left.context, left.namespace, 'deployments', left.deployment);
+  if (compareTargetKey(state.compareTarget) !== key) return; // comparison changed while in flight
+  let rightResult = null;
+  if (right) {
+    rightResult = await window.k8sApi.getResourceYaml(right.kubeconfig, right.context, right.namespace, 'deployments', right.deployment);
+    if (compareTargetKey(state.compareTarget) !== key) return;
+  }
+  state.manifest.key = key;
+  state.manifest.leftYaml = leftResult.ok ? leftResult.yaml : `Error: ${leftResult.error}`;
+  state.manifest.rightYaml = right ? (rightResult.ok ? rightResult.yaml : `Error: ${rightResult.error}`) : null;
+  renderManifestDiff();
+}
+
+// Pure text strip of the top-level `status:` block — replica counts/conditions differ constantly
+// between clusters and aren't spec drift, so they're noise for a manifest diff by default.
+function stripManifestStatus(yaml) {
+  return (yaml || '').replace(/\nstatus:\n(?:[ \t].*\n?)*/, '\n');
+}
+
+function renderManifestDiff() {
+  if (state.manifest.leftYaml == null) return;
+  if (state.manifest.rightYaml == null) {
+    el.manifestDiffOutput.innerHTML = `<div class="manage-empty">— not present in B —</div><pre class="manifest-diff-single">${escHtml(state.manifest.leftYaml)}</pre>`;
+    return;
+  }
+  const hideStatus = el.manifestDiffHideStatus.checked;
+  const left = hideStatus ? stripManifestStatus(state.manifest.leftYaml) : state.manifest.leftYaml;
+  const right = hideStatus ? stripManifestStatus(state.manifest.rightYaml) : state.manifest.rightYaml;
+  const chunks = Diff.diffLines(left, right);
+  el.manifestDiffOutput.innerHTML = chunks.map((part) => {
+    const cls = part.added ? 'manifest-diff-line-added' : part.removed ? 'manifest-diff-line-removed' : 'manifest-diff-line-same';
+    return `<div class="manifest-diff-line ${cls}">${escHtml(part.value).replace(/\n/g, '<br>')}</div>`;
+  }).join('');
+}
+
+el.manifestDiffHideStatus.addEventListener('change', () => {
+  if (state.manifest.leftYaml != null) renderManifestDiff();
 });
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -599,12 +767,16 @@ const BACK_TARGETS = {
 
 function showView(view) {
   // Sole teardown choke point: leaving the manage workspace always stops its
-  // poller and any open log/exec stream, so nothing keeps running in the background.
+  // poller and any open log/exec/port-forward stream, so nothing keeps running in the background.
   if (view !== 'manage') {
     stopManagePolling();
     stopManageMetricsPolling();
+    stopManageOverviewPolling();
     stopManageLogs();
     stopManageExec();
+    stopAllManagePortForwards();
+    clearManageSelection();
+    closeManageSearchResults();
   }
 
   el.homeView.style.display              = view === 'home'                   ? 'flex' : 'none';
@@ -637,8 +809,10 @@ el.cardK8sManage.addEventListener('click', () => {
 
 window.addEventListener('beforeunload', () => {
   stopManagePolling();
+  stopManageMetricsPolling();
   stopManageLogs();
   stopManageExec();
+  stopAllManagePortForwards();
 });
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -1283,16 +1457,25 @@ async function enterManageWorkspace(kubeconfigRef) {
   data.kubeconfig = kubeconfigRef;
   data.context = null;
   data.namespace = null;
-  data.resourceType = 'pods';
+  data.resourceType = 'overview';
+  data.mode = 'kind';
+  data.crds = [];
+  data.activeCrd = null;
   data.rows = [];
   data.selected = null;
+  clearManageSelection();
 
-  el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === 'pods'));
+  el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === 'overview'));
+  el.manageCrdList.innerHTML = '';
   el.manageContext.innerHTML = '<option value="">— select context —</option>';
   el.manageNamespace.innerHTML = '<option value="">— select namespace —</option>';
   el.manageNamespace.disabled = true;
   el.manageSearch.value = '';
+  el.manageOverviewPane.style.display = 'flex';
+  el.manageTableWrap.style.display = 'none';
+  el.manageKindTitle.style.display = 'none';
   closeManageDrawer();
+  closeManageSearchResults();
 
   showView('manage');
   el.btnManageContinue.disabled = false;
@@ -1309,6 +1492,8 @@ async function loadManageContexts() {
     if (contexts.length === 1) {
       el.manageContext.value = contexts[0];
       data.context = contexts[0];
+      loadManageCrds();
+      if (data.resourceType === 'overview') startManageOverviewPolling();
       await loadManageNamespaces();
     }
   } catch (e) {
@@ -1324,15 +1509,21 @@ async function loadManageNamespaces() {
     showLoading('Loading namespaces…');
     const ns = await window.k8sApi.loadNamespaces(data.kubeconfig, data.context);
     populateSelect(el.manageNamespace, ns, '— select namespace —');
+    const allOpt = document.createElement('option');
+    allOpt.value = MANAGE_ALL_NAMESPACES;
+    allOpt.textContent = '(All namespaces)';
+    el.manageNamespace.firstElementChild.after(allOpt);
     el.manageNamespace.disabled = false;
 
     const defaultNs = ns.includes('brand') ? 'brand' : (ns.length === 1 ? ns[0] : null);
     if (defaultNs) {
       el.manageNamespace.value = defaultNs;
       data.namespace = defaultNs;
-      refreshManageResources();
-      startManagePolling();
-      startManageMetricsPolling();
+      if (data.resourceType !== 'overview') {
+        refreshManageResources();
+        startManagePolling();
+        startManageMetricsPolling();
+      }
     }
   } catch (e) {
     alert(`Failed to load namespaces: ${e.message}`);
@@ -1349,9 +1540,23 @@ el.manageContext.addEventListener('change', async () => {
   el.manageNamespace.disabled = true;
   stopManagePolling();
   stopManageMetricsPolling();
+  stopManageOverviewPolling();
+  _clearManageRowsCache();
   closeManageDrawer();
-  renderManageTable(data.resourceType, []);
-  if (data.context) await loadManageNamespaces();
+  closeManageSearchResults();
+  data.crds = [];
+  data.activeCrd = null;
+  el.manageCrdList.innerHTML = '';
+  if (data.resourceType === 'overview') {
+    el.manageOverviewPane.innerHTML = '';
+  } else {
+    renderManageTable(data.resourceType, []);
+  }
+  if (data.context) {
+    loadManageCrds();
+    if (data.resourceType === 'overview') startManageOverviewPolling();
+    await loadManageNamespaces();
+  }
 });
 
 el.manageNamespace.addEventListener('change', () => {
@@ -1359,6 +1564,7 @@ el.manageNamespace.addEventListener('change', () => {
   data.namespace = el.manageNamespace.value || null;
   stopManagePolling();
   stopManageMetricsPolling();
+  _clearManageRowsCache();
   closeManageDrawer();
   if (data.namespace) {
     refreshManageResources();
@@ -1369,12 +1575,320 @@ el.manageNamespace.addEventListener('change', () => {
   }
 });
 
-el.manageSearch.addEventListener('input', () => renderManageTable(state.manage.resourceType, state.manage.rows));
+let _manageSearchTimer;
+el.manageSearch.addEventListener('input', () => {
+  clearTimeout(_manageSearchTimer);
+  _manageSearchTimer = setTimeout(() => {
+    if (state.manage.resourceType !== 'overview') renderManageTable(state.manage.resourceType, state.manage.rows);
+  }, 150);
+});
 el.manageBtnRefresh.addEventListener('click', () => refreshManageResources());
+
+/* ════════════════════════════════════════════════════════════════════════════
+   K8S MANAGE — Settings (gear popover, menu visibility, localStorage)
+   ════════════════════════════════════════════════════════════════════════════ */
+
+const MANAGE_SETTINGS_KEY = 'k8s-manage-settings';
+
+// Group definitions: maps group name → array of kind keys
+const MANAGE_SETTINGS_GROUPS = {
+  workloads: ['pods','deployments','statefulsets','daemonsets','replicasets','jobs','cronjobs',
+              'services','ingresses','configmaps','secrets','hpas','nodes','pvs','namespaces','events'],
+  rbac: ['serviceaccounts','roles','rolebindings','clusterroles','clusterrolebindings'],
+  policy: ['networkpolicies','storageclasses','resourcequotas','limitranges','pvcs'],
+  crd: ['_crd'],
+};
+
+// ── localStorage persistence ──────────────────────────────────────────────────
+
+function loadManageSettings() {
+  try {
+    const raw = localStorage.getItem(MANAGE_SETTINGS_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (saved.menuVisibility) {
+      // Merge with defaults so newly added kinds get their default value
+      Object.assign(state.manage.menuVisibility, saved.menuVisibility);
+    }
+    if (typeof saved.enableMetrics === 'boolean') state.manage.enableMetrics = saved.enableMetrics;
+    if (typeof saved.enableAutoRefresh === 'boolean') state.manage.enableAutoRefresh = saved.enableAutoRefresh;
+  } catch { /* corrupted localStorage — use defaults */ }
+}
+
+function saveManageSettings() {
+  try {
+    localStorage.setItem(MANAGE_SETTINGS_KEY, JSON.stringify({
+      menuVisibility: state.manage.menuVisibility,
+      enableMetrics: state.manage.enableMetrics,
+      enableAutoRefresh: state.manage.enableAutoRefresh,
+    }));
+  } catch { /* quota exceeded — silently ignore */ }
+}
+
+// Load settings immediately on startup
+loadManageSettings();
+
+// ── Sync checkboxes in popover to match state ─────────────────────────────────
+
+function syncSettingsPopoverToState() {
+  // Performance checkboxes
+  el.manageSettingMetrics.checked = state.manage.enableMetrics;
+  el.manageSettingAutoRefresh.checked = state.manage.enableAutoRefresh;
+
+  // Menu item checkboxes
+  const vis = state.manage.menuVisibility;
+  el.manageSettingsPopover.querySelectorAll('[data-settings-menu]').forEach((cb) => {
+    cb.checked = !!vis[cb.dataset.settingsMenu];
+  });
+
+  // Group checkboxes (tri-state)
+  for (const [group, kinds] of Object.entries(MANAGE_SETTINGS_GROUPS)) {
+    const groupCb = el.manageSettingsPopover.querySelector(`[data-settings-group="${group}"]`);
+    if (!groupCb) continue;
+    const onCount = kinds.filter((k) => vis[k]).length;
+    groupCb.checked = onCount === kinds.length;
+    groupCb.indeterminate = onCount > 0 && onCount < kinds.length;
+  }
+}
+
+// ── Apply menu visibility to sidebar DOM ──────────────────────────────────────
+
+// Map each divider text to the group key for show/hide logic
+const MANAGE_DIVIDER_GROUP = {
+  'Workloads': 'workloads',
+  'RBAC': 'rbac',
+  'Policy & Storage': 'policy',
+  'Custom Resources': 'crd',
+};
+
+function applyMenuVisibility() {
+  const vis = state.manage.menuVisibility;
+
+  // Show/hide individual nav items
+  el.manageSidebar.querySelectorAll('.manage-nav-item[data-kind]').forEach((btn) => {
+    const kind = btn.dataset.kind;
+    if (kind === 'overview') return; // Overview is always visible
+    btn.style.display = vis[kind] ? '' : 'none';
+  });
+
+  // Show/hide group dividers — hide if ALL items in the group are hidden
+  el.manageSidebar.querySelectorAll('.manage-nav-divider').forEach((div) => {
+    const groupKey = MANAGE_DIVIDER_GROUP[div.textContent.trim()];
+    if (!groupKey) return;
+    const kinds = MANAGE_SETTINGS_GROUPS[groupKey] || [];
+    const anyVisible = kinds.some((k) => k === '_crd' ? vis._crd : vis[k]);
+    div.style.display = anyVisible ? '' : 'none';
+  });
+
+  // Show/hide Custom Resources CRD filter + list
+  const crdVisible = vis._crd;
+  const crdFilter = el.manageSidebar.querySelector('#manage-crd-filter');
+  const crdList = el.manageSidebar.querySelector('#manage-crd-list');
+  if (crdFilter) crdFilter.style.display = crdVisible ? '' : 'none';
+  if (crdList) crdList.style.display = crdVisible ? '' : 'none';
+
+  // If the currently active kind was just hidden → redirect to overview
+  const data = state.manage;
+  if (data.mode === 'kind' && data.resourceType !== 'overview') {
+    if (!vis[data.resourceType]) {
+      selectManageKind('overview');
+    }
+  } else if (data.mode === 'crd' && !vis._crd) {
+    selectManageKind('overview');
+  }
+}
+
+// ── Popover toggle ────────────────────────────────────────────────────────────
+
+el.manageSettingsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const popover = el.manageSettingsPopover;
+  const isOpen = popover.style.display !== 'none';
+  if (isOpen) {
+    popover.style.display = 'none';
+  } else {
+    syncSettingsPopoverToState();
+    popover.style.display = '';
+  }
+});
+
+// Close popover on click outside
+document.addEventListener('click', (e) => {
+  if (el.manageSettingsPopover.style.display === 'none') return;
+  if (el.manageSettingsPopover.contains(e.target) || el.manageSettingsBtn.contains(e.target)) return;
+  el.manageSettingsPopover.style.display = 'none';
+});
+
+// Prevent popover clicks from bubbling to sidebar nav delegation
+el.manageSettingsPopover.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Menu item checkbox handlers ───────────────────────────────────────────────
+
+el.manageSettingsPopover.addEventListener('change', (e) => {
+  const target = e.target;
+
+  // Individual item checkbox
+  if (target.dataset.settingsMenu) {
+    const kind = target.dataset.settingsMenu;
+    state.manage.menuVisibility[kind] = target.checked;
+    // Update parent group checkbox state
+    for (const [group, kinds] of Object.entries(MANAGE_SETTINGS_GROUPS)) {
+      if (kinds.includes(kind)) {
+        const groupCb = el.manageSettingsPopover.querySelector(`[data-settings-group="${group}"]`);
+        if (groupCb) {
+          const onCount = kinds.filter((k) => state.manage.menuVisibility[k]).length;
+          groupCb.checked = onCount === kinds.length;
+          groupCb.indeterminate = onCount > 0 && onCount < kinds.length;
+        }
+        break;
+      }
+    }
+    applyMenuVisibility();
+    saveManageSettings();
+    return;
+  }
+
+  // Group checkbox
+  if (target.dataset.settingsGroup) {
+    const group = target.dataset.settingsGroup;
+    const kinds = MANAGE_SETTINGS_GROUPS[group] || [];
+    const checked = target.checked;
+    target.indeterminate = false;
+    for (const kind of kinds) {
+      state.manage.menuVisibility[kind] = checked;
+      const itemCb = el.manageSettingsPopover.querySelector(`[data-settings-menu="${kind}"]`);
+      if (itemCb) itemCb.checked = checked;
+    }
+    applyMenuVisibility();
+    saveManageSettings();
+    return;
+  }
+});
+
+// ── Performance setting handlers ──────────────────────────────────────────────
+
+el.manageSettingMetrics.addEventListener('change', () => {
+  const enabled = el.manageSettingMetrics.checked;
+  state.manage.enableMetrics = enabled;
+  if (!enabled) {
+    stopManageMetricsPolling();
+    const activeTab = el.manageDrawer.querySelector('.manage-tab.active');
+    if (activeTab && activeTab.dataset.tab === 'metrics') {
+      switchManageTab('detail');
+    }
+  } else {
+    if (state.manage.enableAutoRefresh && state.manage.context && state.manage.namespace) {
+      startManageMetricsPolling();
+    }
+  }
+  const drawerOpen = el.manageDrawer.classList.contains('open');
+  if (drawerOpen && state.manage.selected) {
+    const metricsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="metrics"]');
+    if (metricsTabBtn) {
+      const isMetricsKind = state.manage.mode === 'kind' && MANAGE_METRICS_KINDS.includes(state.manage.resourceType) && enabled;
+      metricsTabBtn.style.display = isMetricsKind ? '' : 'none';
+    }
+  }
+  if (state.manage.resourceType !== 'overview') {
+    renderManageTable(state.manage.resourceType, state.manage.rows);
+  }
+  saveManageSettings();
+});
+
+el.manageSettingAutoRefresh.addEventListener('change', () => {
+  const enabled = el.manageSettingAutoRefresh.checked;
+  state.manage.enableAutoRefresh = enabled;
+  if (!enabled) {
+    stopManagePolling();
+    stopManageMetricsPolling();
+    stopManageOverviewPolling();
+  } else {
+    if (state.manage.context && state.manage.namespace) {
+      if (state.manage.resourceType === 'overview') {
+        startManageOverviewPolling();
+      } else {
+        startManagePolling();
+        startManageMetricsPolling();
+      }
+    }
+  }
+  saveManageSettings();
+});
+
+// Apply visibility on startup
+applyMenuVisibility();
+
+/* ════════════════════════════════════════════════════════════════════════════
+   K8S MANAGE — Resizable columns (sidebar ↔ main ↔ drawer)
+   ════════════════════════════════════════════════════════════════════════════ */
+
+(function initManageResize() {
+  const sidebarHandle = $('manage-resize-sidebar');
+  const drawerHandle = $('manage-resize-drawer');
+  const sidebar = el.manageSidebar;
+  const drawer = el.manageDrawer;
+
+  const SIDEBAR_MIN = 120, SIDEBAR_MAX = 350;
+  const DRAWER_MIN = 250, DRAWER_MAX = 700;
+
+  function startDrag(handle, onMove) {
+    handle.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const moveHandler = (e) => {
+      e.preventDefault();
+      onMove(e);
+    };
+    const upHandler = () => {
+      handle.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', moveHandler);
+      document.removeEventListener('mouseup', upHandler);
+    };
+    document.addEventListener('mousemove', moveHandler);
+    document.addEventListener('mouseup', upHandler);
+  }
+
+  // Sidebar resize
+  sidebarHandle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const viewRect = el.manageView.getBoundingClientRect();
+    startDrag(sidebarHandle, (moveEvt) => {
+      const newWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, moveEvt.clientX - viewRect.left));
+      sidebar.style.width = newWidth + 'px';
+    });
+  });
+
+  // Drawer resize (drag left to widen, right to narrow)
+  drawerHandle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const viewRect = el.manageView.getBoundingClientRect();
+    startDrag(drawerHandle, (moveEvt) => {
+      const newWidth = Math.min(DRAWER_MAX, Math.max(DRAWER_MIN, viewRect.right - moveEvt.clientX));
+      drawer.style.width = newWidth + 'px';
+    });
+  });
+})();
 
 /* ════════════════════════════════════════════════════════════════════════════
    K8S MANAGE — resource table + polling
    ════════════════════════════════════════════════════════════════════════════ */
+
+// Sentinel sent to main.js as the `namespace` arg to browse a kind across every namespace.
+// Must match ALL_NAMESPACES in main.js exactly — the two processes don't share a module.
+const MANAGE_ALL_NAMESPACES = '__all__';
+
+// Ignore whatever namespace is selected — always listed cluster-wide (mirrors main.js).
+const MANAGE_CLUSTER_SCOPED_KINDS = ['nodes', 'pvs', 'namespaces', 'clusterroles', 'clusterrolebindings', 'storageclasses'];
+
+// Per-row operations (YAML, events, logs, exec, actions, port-forward) must target the row's own
+// namespace when browsing all-namespaces, since the header namespace is just the sentinel there.
+function manageRowNamespace(row) {
+  return state.manage.namespace === MANAGE_ALL_NAMESPACES ? (row.namespace || '') : state.manage.namespace;
+}
+
 const MANAGE_COLUMN_DEFS = {
   pods: [
     { key: 'name', label: 'Name' },
@@ -1405,12 +1919,26 @@ const MANAGE_COLUMN_DEFS = {
     { key: 'ready', label: 'Ready' },
     { key: 'age', label: 'Age', age: true },
   ],
+  replicasets: [
+    { key: 'name', label: 'Name' },
+    { key: 'desired', label: 'Desired' },
+    { key: 'current', label: 'Current' },
+    { key: 'ready', label: 'Ready' },
+    { key: 'age', label: 'Age', age: true },
+  ],
   services: [
     { key: 'name', label: 'Name' },
     { key: 'type', label: 'Type' },
     { key: 'clusterIp', label: 'Cluster IP' },
     { key: 'externalIp', label: 'External IP' },
     { key: 'ports', label: 'Ports' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  ingresses: [
+    { key: 'name', label: 'Name' },
+    { key: 'class', label: 'Class' },
+    { key: 'hosts', label: 'Hosts' },
+    { key: 'address', label: 'Address' },
     { key: 'age', label: 'Age', age: true },
   ],
   configmaps: [
@@ -1424,6 +1952,35 @@ const MANAGE_COLUMN_DEFS = {
     { key: 'keys', label: 'Keys' },
     { key: 'age', label: 'Age', age: true },
   ],
+  jobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'completions', label: 'Completions' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  cronjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'schedule', label: 'Schedule' },
+    { key: 'suspend', label: 'Suspend' },
+    { key: 'active', label: 'Active' },
+    { key: 'lastSchedule', label: 'Last Schedule', age: true },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  pvcs: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', status: true },
+    { key: 'volume', label: 'Volume' },
+    { key: 'capacity', label: 'Capacity' },
+    { key: 'storageClass', label: 'Storage Class' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  hpas: [
+    { key: 'name', label: 'Name' },
+    { key: 'reference', label: 'Reference' },
+    { key: 'minPods', label: 'Min Pods' },
+    { key: 'maxPods', label: 'Max Pods' },
+    { key: 'replicas', label: 'Replicas' },
+    { key: 'age', label: 'Age', age: true },
+  ],
   nodes: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', status: true },
@@ -1433,6 +1990,19 @@ const MANAGE_COLUMN_DEFS = {
     { key: 'mem', label: 'Memory', spark: 'mem' },
     { key: 'age', label: 'Age', age: true },
   ],
+  pvs: [
+    { key: 'name', label: 'Name' },
+    { key: 'capacity', label: 'Capacity' },
+    { key: 'status', label: 'Status', status: true },
+    { key: 'claim', label: 'Claim' },
+    { key: 'storageClass', label: 'Storage Class' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  namespaces: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', status: true },
+    { key: 'age', label: 'Age', age: true },
+  ],
   events: [
     { key: 'type', label: 'Type' },
     { key: 'reason', label: 'Reason' },
@@ -1440,11 +2010,92 @@ const MANAGE_COLUMN_DEFS = {
     { key: 'message', label: 'Message' },
     { key: 'age', label: 'Age', age: true },
   ],
+  serviceaccounts: [
+    { key: 'name', label: 'Name' },
+    { key: 'secrets', label: 'Secrets' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  roles: [
+    { key: 'name', label: 'Name' },
+    { key: 'rules', label: 'Rules' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  rolebindings: [
+    { key: 'name', label: 'Name' },
+    { key: 'role', label: 'Role' },
+    { key: 'subjects', label: 'Subjects' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  clusterroles: [
+    { key: 'name', label: 'Name' },
+    { key: 'rules', label: 'Rules' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  clusterrolebindings: [
+    { key: 'name', label: 'Name' },
+    { key: 'role', label: 'Role' },
+    { key: 'subjects', label: 'Subjects' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  networkpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'podSelector', label: 'Pod Selector' },
+    { key: 'policyTypes', label: 'Types' },
+    { key: 'ingressRules', label: 'Ingress Rules' },
+    { key: 'egressRules', label: 'Egress Rules' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  storageclasses: [
+    { key: 'name', label: 'Name' },
+    { key: 'provisioner', label: 'Provisioner' },
+    { key: 'reclaimPolicy', label: 'Reclaim Policy' },
+    { key: 'volumeBindingMode', label: 'Binding Mode' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  resourcequotas: [
+    { key: 'name', label: 'Name' },
+    { key: 'summary', label: 'Usage' },
+    { key: 'age', label: 'Age', age: true },
+  ],
+  limitranges: [
+    { key: 'name', label: 'Name' },
+    { key: 'limits', label: 'Limit Types' },
+    { key: 'age', label: 'Age', age: true },
+  ],
 };
+
+// Returns the effective columns for a kind, injecting a Namespace column right after Name when
+// browsing all-namespaces (cluster-scoped kinds skip it — their `namespace` field is always empty).
+function getManageColumns(kind) {
+  if (state.manage.mode === 'crd') {
+    const crd = state.manage.activeCrd;
+    const cols = [{ key: 'name', label: 'Name' }, { key: 'age', label: 'Age', age: true }];
+    if (crd && crd.namespaced) cols.splice(1, 0, { key: 'namespace', label: 'Namespace' });
+    return cols;
+  }
+  let cols = MANAGE_COLUMN_DEFS[kind] || MANAGE_COLUMN_DEFS.pods;
+  if (!state.manage.enableMetrics) {
+    cols = cols.filter((c) => !c.spark);
+  }
+  if (state.manage.namespace !== MANAGE_ALL_NAMESPACES || MANAGE_CLUSTER_SCOPED_KINDS.includes(kind)) return cols;
+  const nameIdx = cols.findIndex((c) => c.key === 'name');
+  const withNamespace = cols.slice();
+  withNamespace.splice(nameIdx + 1, 0, { key: 'namespace', label: 'Namespace' });
+  return withNamespace;
+}
 
 // Nodes/Events change slowly and are usually shared across many namespaces —
 // polling them as often as pods just adds load for no benefit.
 const MANAGE_POLL_INTERVAL = { nodes: 10000, events: 10000 };
+
+// Columns for the drawer's scoped-Events pane — no "Object" column since it's always the selected resource.
+const MANAGE_EVENTS_PANE_COLUMNS = [
+  { key: 'type', label: 'Type' },
+  { key: 'reason', label: 'Reason' },
+  { key: 'message', label: 'Message' },
+  { key: 'count', label: 'Count' },
+  { key: 'age', label: 'Age', age: true },
+];
 
 const MANAGE_METRICS_KINDS = ['pods', 'nodes'];
 const MANAGE_METRICS_POLL_INTERVAL = 10000;
@@ -1461,11 +2112,17 @@ function relAge(ts) {
   return `${Math.floor(hours / 24)}d`;
 }
 
+// Pod/node names alone aren't unique when browsing all-namespaces (same name can exist in
+// multiple namespaces) — key metrics series by namespace+name so their sparklines don't collide.
+function metricsKey(row) {
+  return `${row.namespace || ''}/${row.name}`;
+}
+
 function manageStatusClass(status) {
   const s = (status || '').toLowerCase();
-  if (s === 'running' || s === 'ready' || s === 'completed' || s === 'succeeded') return 'manage-status-running';
-  if (s === 'pending' || s === 'containercreating') return 'manage-status-pending';
-  return 'manage-status-error'; // CrashLoopBackOff, Error, ImagePullBackOff, NotReady, …
+  if (['running', 'ready', 'completed', 'succeeded', 'active', 'bound', 'available'].includes(s)) return 'manage-status-running';
+  if (['pending', 'containercreating', 'terminating', 'released'].includes(s)) return 'manage-status-pending';
+  return 'manage-status-error'; // CrashLoopBackOff, Error, ImagePullBackOff, NotReady, Failed, Lost, …
 }
 
 el.manageSidebar.addEventListener('click', (e) => {
@@ -1474,69 +2131,299 @@ el.manageSidebar.addEventListener('click', (e) => {
   selectManageKind(btn.dataset.kind);
 });
 
+// Selection is scoped by namespace+name so bulk-select stays correct in all-namespaces mode,
+// where `name` alone isn't unique.
+function manageSelectionKey(row) {
+  return `${row.namespace || ''}::${row.name}`;
+}
+
+function clearManageSelection() {
+  state.manage.selection.clear();
+  renderManageBulkBar();
+}
+
+// ── Resource cache: instant display when switching kinds ──────────────────────
+// Keyed by `namespace::kind`, stores the last successfully fetched rows array.
+// Cleared on context/namespace change so stale cross-namespace data never shows.
+const _manageRowsCache = new Map();
+
+function _manageRowsCacheKey(ns, kind) {
+  return `${ns || ''}::${kind}`;
+}
+
+function _clearManageRowsCache() {
+  _manageRowsCache.clear();
+}
+
+// Shows a small "you are here" label above the table — without it, once you're inside a CRD
+// with a name that also exists under a different API group (e.g. Traefik's Middleware under both
+// traefik.io and traefik.containo.us), nothing on screen says which one you're actually browsing.
+function updateManageKindTitle() {
+  const data = state.manage;
+  if (data.mode === 'crd' && data.activeCrd) {
+    el.manageKindTitle.textContent = `${data.activeCrd.kind} · ${data.activeCrd.group || '(core)'}`;
+    el.manageKindTitle.style.display = '';
+  } else if (data.resourceType && data.resourceType !== 'overview') {
+    const activeBtn = el.manageSidebar.querySelector('.manage-nav-item.active');
+    el.manageKindTitle.textContent = activeBtn ? activeBtn.textContent.trim() : (MANAGE_KIND_LABEL_PLURAL[data.resourceType] || data.resourceType);
+    el.manageKindTitle.style.display = '';
+  } else {
+    el.manageKindTitle.style.display = 'none';
+  }
+}
+
 function selectManageKind(kind) {
   const data = state.manage;
-  if (kind === data.resourceType) return;
+
+  if (kind === 'overview') {
+    if (data.mode === 'kind' && data.resourceType === 'overview') return;
+    data.mode = 'kind';
+    data.activeCrd = null;
+    data.resourceType = 'overview';
+    data.rows = [];
+    clearManageSelection();
+    el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === 'overview'));
+    el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
+    closeManageDrawer();
+    stopManagePolling();
+    stopManageMetricsPolling();
+    el.manageTableWrap.style.display = 'none';
+    el.manageOverviewPane.style.display = 'flex';
+    updateManageKindTitle();
+    startManageOverviewPolling();
+    return;
+  }
+
+  if (kind === data.resourceType && data.mode === 'kind') return;
+  data.mode = 'kind';
+  data.activeCrd = null;
   data.resourceType = kind;
-  data.rows = [];
+  clearManageSelection();
   el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === kind));
+  el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
+  el.manageOverviewPane.style.display = 'none';
+  el.manageTableWrap.style.display = '';
+  updateManageKindTitle();
   closeManageDrawer();
+  stopManageOverviewPolling();
   stopManagePolling();
   stopManageMetricsPolling();
+
+  // Restore cached rows instantly (avoids blank table while HTTP request is in-flight).
+  const cached = _manageRowsCache.get(_manageRowsCacheKey(data.namespace, kind));
+  data.rows = cached || [];
+  renderManageTable(kind, data.rows);
+  if (cached) {
+    el.manageRefreshStatus.textContent = 'Refreshing…';
+  }
+
   if (data.context && data.namespace) {
     refreshManageResources();
     startManagePolling();
     startManageMetricsPolling();
-  } else {
-    renderManageTable(kind, []);
+  }
+}
+
+// ── Diff-update renderer ─────────────────────────────────────────────────────
+// On initial render (kind/namespace switch) we do a full DOM build.
+// On polling refresh the table structure already exists, so we diff: match rows
+// by key, update only changed cells in-place, append new rows, remove stale ones.
+// This cuts DOM mutations by ~95% during steady-state polling.
+
+// Builds the inner HTML for a row's data cells (everything after the checkbox).
+function _manageCellsHtml(cols, row) {
+  return cols.map((c) => {
+    const val = row[c.key];
+    if (c.spark) return `<td><span class="manage-spark" data-row="${escHtml(metricsKey(row))}" data-metric="${c.spark}"></span></td>`;
+    if (c.age) return `<td>${escHtml(relAge(val))}</td>`;
+    if (c.status) return `<td><span class="status-pill ${manageStatusClass(val)}">${escHtml(val || '')}</span></td>`;
+    return `<td>${escHtml(val ?? '')}</td>`;
+  }).join('');
+}
+
+// Creates a full <tr> for `row`, including checkbox cell, click handler, and data attribute.
+function _manageCreateTr(kind, cols, row) {
+  const tr = document.createElement('tr');
+  tr.style.cursor = 'pointer';
+  tr.dataset.rowKey = manageSelectionKey(row);
+
+  const checkboxCell = document.createElement('td');
+  checkboxCell.className = 'manage-select-col';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = state.manage.selection.has(tr.dataset.rowKey);
+  checkbox.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (checkbox.checked) state.manage.selection.add(tr.dataset.rowKey);
+    else state.manage.selection.delete(tr.dataset.rowKey);
+    renderManageBulkBar();
+    updateManageSelectAllState(state.manage._lastFiltered || []);
+  });
+  checkboxCell.appendChild(checkbox);
+  tr.appendChild(checkboxCell);
+
+  tr.insertAdjacentHTML('beforeend', _manageCellsHtml(cols, row));
+  tr._rowData = row;
+  tr.addEventListener('click', () => openManageDrawer(kind, tr._rowData));
+  return tr;
+}
+
+// Patches an existing <tr>'s data cells in-place (skips checkbox, skips sparklines).
+function _manageUpdateTr(tr, cols, row) {
+  // Cells: [0]=checkbox, [1..N]=data columns
+  const cells = tr.children;
+  for (let i = 0; i < cols.length; i++) {
+    const c = cols[i];
+    const td = cells[i + 1]; // +1 for checkbox cell
+    if (!td || c.spark) continue; // sparklines are handled separately
+
+    let newText;
+    const val = row[c.key];
+    if (c.age) {
+      newText = relAge(val);
+    } else if (c.status) {
+      // Status pill: update both text and class
+      const pill = td.querySelector('.status-pill');
+      if (pill) {
+        const txt = val || '';
+        if (pill.textContent !== txt) pill.textContent = txt;
+        const cls = `status-pill ${manageStatusClass(val)}`;
+        if (pill.className !== cls) pill.className = cls;
+      }
+      continue;
+    } else {
+      newText = String(val ?? '');
+    }
+    if (td.textContent !== newText) td.textContent = newText;
+  }
+  // Update checkbox state
+  const checkbox = cells[0]?.querySelector('input');
+  if (checkbox) {
+    const key = tr.dataset.rowKey;
+    const shouldBeChecked = state.manage.selection.has(key);
+    if (checkbox.checked !== shouldBeChecked) checkbox.checked = shouldBeChecked;
   }
 }
 
 function renderManageTable(kind, rows) {
-  const cols = MANAGE_COLUMN_DEFS[kind] || MANAGE_COLUMN_DEFS.pods;
+  const cols = getManageColumns(kind);
   const query = (el.manageSearch.value || '').toLowerCase();
   const filtered = query ? rows.filter((r) => (r.name || '').toLowerCase().includes(query)) : rows;
+  state.manage._lastFiltered = filtered;
 
-  el.manageThead.innerHTML = `<tr>${cols.map((c) => `<th>${escHtml(c.label)}</th>`).join('')}</tr>`;
+  // Always rebuild <thead> (cheap, one row)
+  el.manageThead.innerHTML = `<tr><th class="manage-select-col"><input type="checkbox" id="manage-select-all" /></th>${cols.map((c) => `<th>${escHtml(c.label)}</th>`).join('')}</tr>`;
+  const selectAllBox = $('manage-select-all');
 
   if (filtered.length === 0) {
-    el.manageTbody.innerHTML = `<tr><td colspan="${cols.length}" class="manage-empty">${query ? 'No match' : 'No resources found'}</td></tr>`;
+    el.manageTbody.innerHTML = `<tr><td colspan="${cols.length + 1}" class="manage-empty">${query ? 'No match' : 'No resources found'}</td></tr>`;
+    if (selectAllBox) selectAllBox.disabled = true;
     return;
   }
 
-  el.manageTbody.innerHTML = '';
-  for (const row of filtered) {
-    const tr = document.createElement('tr');
-    tr.style.cursor = 'pointer';
-    tr.innerHTML = cols.map((c) => {
-      const val = row[c.key];
-      if (c.spark) return `<td><span class="manage-spark" data-row="${escHtml(row.name)}" data-metric="${c.spark}"></span></td>`;
-      if (c.age) return `<td>${escHtml(relAge(val))}</td>`;
-      if (c.status) return `<td><span class="status-pill ${manageStatusClass(val)}">${escHtml(val || '')}</span></td>`;
-      return `<td>${escHtml(val ?? '')}</td>`;
-    }).join('');
-    tr.addEventListener('click', () => openManageDrawer(kind, row));
-    el.manageTbody.appendChild(tr);
+  // ── Diff-update: build a map of existing rows by key ────────────────────────
+  const existingMap = new Map();
+  for (const tr of Array.from(el.manageTbody.children)) {
+    if (tr.dataset.rowKey) existingMap.set(tr.dataset.rowKey, tr);
+  }
+
+  // If the existing tbody has no keyed rows (first render, kind switch, etc.) → full build.
+  const canDiff = existingMap.size > 0;
+
+  if (!canDiff) {
+    // Full build — same as before but rows get data-row-key for future diffs.
+    el.manageTbody.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    for (const row of filtered) {
+      frag.appendChild(_manageCreateTr(kind, cols, row));
+    }
+    el.manageTbody.appendChild(frag);
+  } else {
+    // Diff update
+    const newKeys = new Set(filtered.map(manageSelectionKey));
+
+    // 1. Remove rows that no longer exist
+    for (const [key, tr] of existingMap) {
+      if (!newKeys.has(key)) {
+        tr.remove();
+        existingMap.delete(key);
+      }
+    }
+
+    // 2. Update existing rows in-place, append new ones, maintain order
+    let prevTr = null;
+    for (const row of filtered) {
+      const key = manageSelectionKey(row);
+      let tr = existingMap.get(key);
+      if (tr) {
+        // Update cells that changed
+        _manageUpdateTr(tr, cols, row);
+      } else {
+        // New row — create and insert in order
+        tr = _manageCreateTr(kind, cols, row);
+      }
+      // Ensure correct order: tr should come after prevTr
+      if (prevTr) {
+        if (tr.previousElementSibling !== prevTr) {
+          prevTr.after(tr);
+        }
+      } else {
+        if (tr !== el.manageTbody.firstElementChild) {
+          el.manageTbody.prepend(tr);
+        }
+      }
+      // Update the stored row reference so drawer click opens fresh data
+      tr._rowData = row;
+      prevTr = tr;
+    }
+  }
+
+  updateManageSelectAllState(filtered);
+  if (selectAllBox) {
+    selectAllBox.addEventListener('change', () => {
+      for (const row of filtered) {
+        const key = manageSelectionKey(row);
+        if (selectAllBox.checked) state.manage.selection.add(key);
+        else state.manage.selection.delete(key);
+      }
+      renderManageTable(kind, rows);
+      renderManageBulkBar();
+    });
   }
   renderManageMetricsSparklines();
 }
 
+function updateManageSelectAllState(filteredRows) {
+  const selectAllBox = $('manage-select-all');
+  if (!selectAllBox) return;
+  const keys = filteredRows.map(manageSelectionKey);
+  const selectedCount = keys.filter((k) => state.manage.selection.has(k)).length;
+  selectAllBox.disabled = false;
+  selectAllBox.checked = selectedCount > 0 && selectedCount === keys.length;
+  selectAllBox.indeterminate = selectedCount > 0 && selectedCount < keys.length;
+}
+
 function renderManageErrorRow(kind, error) {
-  const cols = MANAGE_COLUMN_DEFS[kind] || MANAGE_COLUMN_DEFS.pods;
+  const cols = getManageColumns(kind);
   el.manageThead.innerHTML = `<tr>${cols.map((c) => `<th>${escHtml(c.label)}</th>`).join('')}</tr>`;
   el.manageTbody.innerHTML = `<tr><td colspan="${cols.length}" class="manage-empty">${escHtml(error)}</td></tr>`;
 }
 
+let _manageResourceGen = 0;
+
 async function refreshManageResources() {
   const data = state.manage;
+  if (data.mode === 'crd' && data.activeCrd) return refreshManageCustomResources();
   if (!data.context || !data.namespace) return;
+  const gen = ++_manageResourceGen;
   const kindAtStart = data.resourceType;
   const nsAtStart = data.namespace;
   el.manageRefreshStatus.textContent = 'Refreshing…';
 
   try {
     const result = await window.k8sApi.listResource(data.kubeconfig, data.context, nsAtStart, kindAtStart);
-    // Kind/namespace may have changed while this request was in flight — drop stale responses.
+    // Generation counter: drop stale responses from superseded requests.
+    if (gen !== _manageResourceGen) return;
     if (data.resourceType !== kindAtStart || data.namespace !== nsAtStart) return;
 
     if (!result.ok) {
@@ -1546,8 +2433,12 @@ async function refreshManageResources() {
       return;
     }
     data.rows = result.rows;
+    _manageRowsCache.set(_manageRowsCacheKey(nsAtStart, kindAtStart), result.rows);
     renderManageTable(kindAtStart, data.rows);
     el.manageRefreshStatus.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    if (data.enableMetrics && MANAGE_METRICS_KINDS.includes(kindAtStart)) {
+      refreshManageMetrics();
+    }
   } catch (e) {
     el.manageRefreshStatus.textContent = `Error: ${e.message}`;
   }
@@ -1555,6 +2446,7 @@ async function refreshManageResources() {
 
 function startManagePolling() {
   stopManagePolling();
+  if (!state.manage.enableAutoRefresh) return;
   const interval = MANAGE_POLL_INTERVAL[state.manage.resourceType] || 5000;
   state.manage.pollTimer = setInterval(refreshManageResources, interval);
 }
@@ -1566,9 +2458,366 @@ function stopManagePolling() {
   }
 }
 
+/* ── K8s Manage: bulk actions ────────────────────────────────────────────── */
+
+function renderManageBulkBar() {
+  const n = state.manage.selection.size;
+  el.manageBulkBar.style.display = n > 0 ? 'flex' : 'none';
+  el.manageBulkCount.textContent = `${n} selected`;
+  const kind = state.manage.resourceType;
+  const restartBtn = el.manageBulkBar.querySelector('[data-bulk-action="restart"]');
+  restartBtn.style.display = ['deployments', 'statefulsets', 'daemonsets'].includes(kind) ? '' : 'none';
+}
+
+el.manageBulkBar.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-bulk-action]');
+  if (!btn) return;
+  runManageBulkAction(btn.dataset.bulkAction);
+});
+
+// Small bounded-concurrency map — avoids opening dozens of simultaneous connections
+// against the API server when a large selection is bulk-actioned.
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+async function runManageBulkAction(action) {
+  const data = state.manage;
+  const kind = data.mode === 'crd' ? data.activeCrd.name : data.resourceType;
+  const kindLabel = data.mode === 'crd' ? data.activeCrd.kind : (MANAGE_KIND_SINGULAR[kind] || kind);
+  const rows = data.rows.filter((r) => data.selection.has(manageSelectionKey(r)));
+  if (rows.length === 0) return;
+
+  if (action === 'delete') {
+    const { ok } = await showManageConfirm({
+      title: `Delete ${rows.length} ${kindLabel}(s)?`,
+      body: `This permanently deletes ${rows.length} selected resources. Type the count to confirm.`,
+      danger: true,
+      confirmLabel: 'Delete',
+      typedValue: String(rows.length),
+    });
+    if (!ok) return;
+  } else if (action === 'restart') {
+    const { ok } = await showManageConfirm({
+      title: `Restart rollout for ${rows.length} resources?`,
+      body: 'This restarts every pod managed by each selected resource, one at a time.',
+      confirmLabel: 'Restart',
+    });
+    if (!ok) return;
+  } else {
+    return;
+  }
+
+  const results = await mapLimit(rows, 5, async (row) => {
+    const result = data.mode === 'crd'
+      ? await window.k8sApi.customResourceAction(
+          data.kubeconfig, data.context, manageRowNamespace(row),
+          data.activeCrd.group, data.activeCrd.version, data.activeCrd.plural, row.name, data.activeCrd.namespaced, action
+        )
+      : await window.k8sApi.resourceAction(data.kubeconfig, data.context, manageRowNamespace(row), kind, row.name, action, undefined);
+    return { row, result };
+  });
+
+  const failed = results.filter((r) => !r.result.ok);
+  const succeeded = results.length - failed.length;
+  el.manageBulkResult.style.display = 'block';
+  el.manageBulkResult.className = `manage-bulk-result${failed.length ? ' manage-bulk-result-partial' : ' manage-bulk-result-ok'}`;
+  el.manageBulkResult.textContent = failed.length === 0
+    ? `${succeeded}/${results.length} succeeded`
+    : `${succeeded}/${results.length} succeeded, ${failed.length} failed: ${failed.map((f) => `${f.row.name} (${f.result.error})`).join(', ')}`;
+
+  clearManageSelection();
+  refreshManageResources();
+}
+
+/* ── K8s Manage: cluster overview / health-summary landing page ──────────── */
+
+const MANAGE_OVERVIEW_POLL_INTERVAL = 30000;
+
+function startManageOverviewPolling() {
+  stopManageOverviewPolling();
+  refreshManageOverview();
+  if (!state.manage.enableAutoRefresh) return;
+  state.manage.overviewPollTimer = setInterval(refreshManageOverview, MANAGE_OVERVIEW_POLL_INTERVAL);
+}
+
+function stopManageOverviewPolling() {
+  if (state.manage.overviewPollTimer) {
+    clearInterval(state.manage.overviewPollTimer);
+    state.manage.overviewPollTimer = null;
+  }
+}
+
+async function refreshManageOverview() {
+  const data = state.manage;
+  if (data.resourceType !== 'overview' || !data.context) return;
+  const contextAtStart = data.context;
+  const result = await window.k8sApi.getManageOverview(data.kubeconfig, data.context);
+  if (data.resourceType !== 'overview' || data.context !== contextAtStart) return;
+  if (!result.ok) {
+    el.manageOverviewPane.innerHTML = `<div class="manage-empty">${escHtml(result.error)}</div>`;
+    return;
+  }
+  renderManageOverview(result.digest);
+}
+
+const MANAGE_OVERVIEW_TILES = [
+  { key: 'podsNotReady', title: 'Pods not Ready', jumpKind: 'pods' },
+  { key: 'deploymentsUnhealthy', title: 'Deployments unhealthy', jumpKind: 'deployments' },
+  { key: 'nodesNotReady', title: 'Nodes NotReady', jumpKind: 'nodes' },
+  { key: 'warningEvents', title: 'Warning events', jumpKind: 'events' },
+];
+
+function renderManageOverview(digest) {
+  el.manageOverviewPane.innerHTML = MANAGE_OVERVIEW_TILES.map((t) => {
+    const d = digest[t.key] || { count: 0, items: [] };
+    const itemsHtml = d.items.length === 0
+      ? '<div class="manage-overview-tile-empty">None</div>'
+      : d.items.map((item) => {
+          const label = item.object || item.name || '';
+          const sub = item.status || item.ready || item.reason || '';
+          return `<div class="manage-overview-tile-row" data-kind="${escHtml(t.jumpKind)}" data-namespace="${escHtml(item.namespace || '')}" data-name="${escHtml(item.name || '')}">
+            <span class="manage-overview-tile-row-name">${escHtml(item.namespace ? `${item.namespace}/${label || item.name}` : (label || item.name || ''))}</span>
+            <span class="manage-overview-tile-row-sub">${escHtml(sub)}</span>
+          </div>`;
+        }).join('');
+    return `
+      <div class="manage-overview-tile">
+        <div class="manage-overview-tile-header">
+          <span class="manage-overview-tile-title">${escHtml(t.title)}</span>
+          <span class="manage-overview-tile-count ${d.count > 0 ? 'manage-overview-tile-count-bad' : ''}">${d.count}</span>
+        </div>
+        <div class="manage-overview-tile-list">${itemsHtml}</div>
+      </div>`;
+  }).join('');
+
+  el.manageOverviewPane.querySelectorAll('.manage-overview-tile-row[data-name]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const kind = row.dataset.kind;
+      const namespace = row.dataset.namespace;
+      const name = row.dataset.name;
+      selectManageKind(kind);
+      if (namespace && el.manageNamespace.querySelector(`option[value="${CSS.escape(namespace)}"]`)) {
+        el.manageNamespace.value = namespace;
+        state.manage.namespace = namespace;
+      } else {
+        el.manageNamespace.value = MANAGE_ALL_NAMESPACES;
+        state.manage.namespace = MANAGE_ALL_NAMESPACES;
+      }
+      refreshManageResources().then(() => {
+        const found = state.manage.rows.find((r) => r.name === name && (r.namespace || '') === namespace);
+        if (found) openManageDrawer(kind, found);
+      });
+      startManagePolling();
+      startManageMetricsPolling();
+    });
+  });
+}
+
+/* ── K8s Manage: CRD / custom-resource browsing ───────────────────────────── */
+
+async function loadManageCrds() {
+  const data = state.manage;
+  const result = await window.k8sApi.listCrds(data.kubeconfig, data.context);
+  data.crds = result.ok ? result.crds : [];
+  renderManageCrdList(el.manageCrdFilter.value);
+}
+
+// Several CRDs can share the same `kind` across different API groups (e.g. Traefik ships
+// duplicate Kinds under both `traefik.io` and the legacy `traefik.containo.us` for migration) —
+// grouping by group (the CRD's actual "parent") disambiguates them instead of showing bare,
+// indistinguishable Kind names side by side.
+// Groups collapsed by the user (by group name) — remembered across re-renders within the
+// session; a group containing the active CRD, or matching an active filter, always shows
+// expanded regardless of its remembered state, so selecting/searching never hides the result.
+const _manageCrdCollapsedGroups = new Set();
+
+function renderManageCrdList(filter = '') {
+  const q = filter.trim().toLowerCase();
+  const items = state.manage.crds.filter((c) => !q || c.name.toLowerCase().includes(q) || c.kind.toLowerCase().includes(q));
+  if (items.length === 0) {
+    el.manageCrdList.innerHTML = state.manage.crds.length === 0
+      ? '<div class="manage-empty-hint">No CRDs found</div>'
+      : '<div class="manage-empty-hint">No match</div>';
+    return;
+  }
+
+  const byGroup = new Map();
+  for (const c of items) {
+    const group = c.group || '(core)';
+    if (!byGroup.has(group)) byGroup.set(group, []);
+    byGroup.get(group).push(c);
+  }
+  const groups = Array.from(byGroup.keys()).sort((a, b) => a.localeCompare(b));
+  const activeGroup = state.manage.activeCrd ? (state.manage.activeCrd.group || '(core)') : null;
+
+  el.manageCrdList.innerHTML = groups.map((group) => {
+    const crds = byGroup.get(group).sort((a, b) => a.kind.localeCompare(b.kind));
+    const forceOpen = !!q || group === activeGroup;
+    const collapsed = !forceOpen && _manageCrdCollapsedGroups.has(group);
+    const header = `
+      <button class="manage-crd-group-header${collapsed ? ' collapsed' : ''}" data-crd-group="${escHtml(group)}">
+        <svg class="manage-crd-group-caret" width="8" height="8" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        <span class="manage-crd-group-name">${escHtml(group)}</span>
+        <span class="manage-crd-group-count">${crds.length}</span>
+      </button>`;
+    if (collapsed) return header;
+    const rows = crds.map((c) => `<button class="manage-nav-item manage-crd-item${state.manage.activeCrd && state.manage.activeCrd.name === c.name ? ' active' : ''}" data-crd="${escHtml(c.name)}" title="${escHtml(c.name)}">${escHtml(c.kind)}</button>`).join('');
+    return header + rows;
+  }).join('');
+}
+
+el.manageCrdFilter.addEventListener('input', () => renderManageCrdList(el.manageCrdFilter.value));
+
+el.manageCrdList.addEventListener('click', (e) => {
+  const groupHeader = e.target.closest('.manage-crd-group-header');
+  if (groupHeader) {
+    const group = groupHeader.dataset.crdGroup;
+    if (_manageCrdCollapsedGroups.has(group)) _manageCrdCollapsedGroups.delete(group);
+    else _manageCrdCollapsedGroups.add(group);
+    renderManageCrdList(el.manageCrdFilter.value);
+    return;
+  }
+  const btn = e.target.closest('.manage-crd-item');
+  if (!btn) return;
+  // CRD buttons also carry `.manage-nav-item` for shared styling — without this, the click would
+  // keep bubbling into #manage-sidebar's own delegated listener and get double-handled as a
+  // (bogus, kind=undefined) built-in-kind selection, clobbering the CRD selection we just made.
+  e.stopPropagation();
+  const crd = state.manage.crds.find((c) => c.name === btn.dataset.crd);
+  if (crd) selectManageCrd(crd);
+});
+
+function selectManageCrd(crd) {
+  const data = state.manage;
+  data.mode = 'crd';
+  data.activeCrd = crd;
+  data.resourceType = null;
+  data.rows = [];
+  clearManageSelection();
+  el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.remove('active'));
+  renderManageCrdList(el.manageCrdFilter.value); // re-render so the CRD's group is force-expanded and highlighted
+  el.manageOverviewPane.style.display = 'none';
+  el.manageTableWrap.style.display = '';
+  updateManageKindTitle();
+  closeManageDrawer();
+  stopManageOverviewPolling();
+  stopManagePolling();
+  stopManageMetricsPolling();
+  if (data.context && (data.namespace || !crd.namespaced)) {
+    refreshManageResources();
+    startManagePolling();
+  } else {
+    renderManageTable(crd.name, []);
+  }
+}
+
+async function refreshManageCustomResources() {
+  const data = state.manage;
+  const crd = data.activeCrd;
+  if (!data.context || (crd.namespaced && !data.namespace)) return;
+  const crdAtStart = crd;
+  const nsAtStart = data.namespace;
+  el.manageRefreshStatus.textContent = 'Refreshing…';
+  const result = await window.k8sApi.listCustomResource(data.kubeconfig, data.context, nsAtStart, crd.group, crd.version, crd.plural, crd.namespaced);
+  if (data.activeCrd !== crdAtStart || data.namespace !== nsAtStart) return;
+  if (!result.ok) {
+    data.rows = [];
+    renderManageErrorRow(crd.name, result.error);
+    el.manageRefreshStatus.textContent = `Error at ${new Date().toLocaleTimeString()}`;
+    return;
+  }
+  data.rows = result.rows;
+  renderManageTable(crd.name, data.rows);
+  el.manageRefreshStatus.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+}
+
+/* ── K8s Manage: global search across kinds ───────────────────────────────── */
+
+function runGlobalManageSearch() {
+  const data = state.manage;
+  const query = (el.manageSearch.value || '').trim();
+  if (!data.context || !query) return;
+  el.manageSearchResults.style.display = 'flex';
+  el.manageSearchResultsTitle.textContent = `Searching for "${query}"…`;
+  el.manageSearchResultsBody.innerHTML = '';
+  window.k8sApi.searchResources(data.kubeconfig, data.context, data.namespace || '', query).then((result) => {
+    if (!result.ok) {
+      el.manageSearchResultsTitle.textContent = `Search failed`;
+      el.manageSearchResultsBody.innerHTML = `<div class="manage-empty">${escHtml(result.error)}</div>`;
+      return;
+    }
+    el.manageSearchResultsTitle.textContent = `${result.results.length} result(s) for "${query}"`;
+    if (result.results.length === 0) {
+      el.manageSearchResultsBody.innerHTML = '<div class="manage-empty">No matches</div>';
+      return;
+    }
+    el.manageSearchResultsBody.innerHTML = result.results.map((r) => `
+      <div class="manage-search-result-row" data-kind="${escHtml(r.kind)}" data-namespace="${escHtml(r.namespace || '')}" data-name="${escHtml(r.name)}">
+        <span class="manage-search-result-kind">${escHtml(MANAGE_KIND_LABEL_PLURAL[r.kind] || r.kind)}</span>
+        <span class="manage-search-result-name">${escHtml(r.namespace ? `${r.namespace}/${r.name}` : r.name)}</span>
+      </div>`).join('')
+      + (result.errors.length ? `<div class="manage-search-errors">Couldn't search: ${result.errors.map((e) => `${e.kind} (${e.error})`).join(', ')}</div>` : '');
+
+    el.manageSearchResultsBody.querySelectorAll('.manage-search-result-row').forEach((rowEl) => {
+      rowEl.addEventListener('click', () => {
+        const kind = rowEl.dataset.kind;
+        const namespace = rowEl.dataset.namespace;
+        const name = rowEl.dataset.name;
+        closeManageSearchResults();
+        selectManageKind(kind);
+        const applyRow = () => {
+          const row = state.manage.rows.find((r) => r.name === name && (r.namespace || '') === namespace);
+          if (row) openManageDrawer(kind, row);
+        };
+        if (namespace && el.manageNamespace.querySelector(`option[value="${CSS.escape(namespace)}"]`)) {
+          el.manageNamespace.value = namespace;
+          state.manage.namespace = namespace;
+        } else if (!MANAGE_CLUSTER_SCOPED_KINDS.includes(kind)) {
+          el.manageNamespace.value = MANAGE_ALL_NAMESPACES;
+          state.manage.namespace = MANAGE_ALL_NAMESPACES;
+        }
+        refreshManageResources().then(applyRow);
+        startManagePolling();
+        startManageMetricsPolling();
+      });
+    });
+  });
+}
+
+function closeManageSearchResults() {
+  el.manageSearchResults.style.display = 'none';
+}
+
+el.manageSearchAllBtn.addEventListener('click', runGlobalManageSearch);
+el.manageSearch.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') runGlobalManageSearch();
+});
+el.manageSearchResultsClose.addEventListener('click', closeManageSearchResults);
+
+const MANAGE_KIND_LABEL_PLURAL = {
+  pods: 'Pod', deployments: 'Deployment', statefulsets: 'StatefulSet', daemonsets: 'DaemonSet',
+  replicasets: 'ReplicaSet', services: 'Service', ingresses: 'Ingress', configmaps: 'ConfigMap',
+  secrets: 'Secret', jobs: 'Job', cronjobs: 'CronJob', pvcs: 'PVC', hpas: 'HPA', nodes: 'Node',
+  pvs: 'PV', namespaces: 'Namespace', serviceaccounts: 'ServiceAccount', roles: 'Role',
+  rolebindings: 'RoleBinding', clusterroles: 'ClusterRole', clusterrolebindings: 'ClusterRoleBinding',
+  networkpolicies: 'NetworkPolicy', storageclasses: 'StorageClass', resourcequotas: 'ResourceQuota',
+  limitranges: 'LimitRange',
+};
+
 
 function startManageMetricsPolling() {
   stopManageMetricsPolling();
+  if (!state.manage.enableAutoRefresh || !state.manage.enableMetrics) return;
   if (!MANAGE_METRICS_KINDS.includes(state.manage.resourceType)) return;
   refreshManageMetrics();
   state.manage.metricsPollTimer = setInterval(refreshManageMetrics, MANAGE_METRICS_POLL_INTERVAL);
@@ -1585,6 +2834,7 @@ function stopManageMetricsPolling() {
 
 async function refreshManageMetrics() {
   const data = state.manage;
+  if (!data.enableMetrics) return;
   const kindAtStart = data.resourceType;
   const nsAtStart = data.namespace;
   if (!MANAGE_METRICS_KINDS.includes(kindAtStart) || !data.context || !nsAtStart) return;
@@ -1606,8 +2856,9 @@ async function refreshManageMetrics() {
   data.metricsAvailable = true;
   const now = Date.now();
   for (const row of result.rows) {
-    let series = data.metricsSeries.get(row.name);
-    if (!series) { series = []; data.metricsSeries.set(row.name, series); }
+    const key = metricsKey(row);
+    let series = data.metricsSeries.get(key);
+    if (!series) { series = []; data.metricsSeries.set(key, series); }
     series.push({ t: now, cpu: row.cpu, mem: row.memory });
     if (series.length > MANAGE_METRICS_MAX_POINTS) series.shift();
   }
@@ -1644,6 +2895,10 @@ function renderManageMetricsSparklines() {
   el.manageTbody.querySelectorAll('.manage-spark').forEach((node) => {
     const series = data.metricsSeries.get(node.dataset.row);
     if (!series || !series.length) return;
+    // Skip re-render if the series hasn't grown since the last render.
+    const len = series.length;
+    if (node._lastSeriesLen === len) return;
+    node._lastSeriesLen = len;
     const metric = node.dataset.metric;
     renderSparkline(node, series, { accessor: (p) => (metric === 'cpu' ? p.cpu : p.mem) });
   });
@@ -1657,7 +2912,7 @@ function renderManageMetricsPane() {
   }
   const row = data.selected;
   if (!row) return;
-  const series = data.metricsSeries.get(row.name) || [];
+  const series = data.metricsSeries.get(metricsKey(row)) || [];
   const latest = series[series.length - 1];
   el.manageMetricsPane.innerHTML = `
     <div class="manage-chart-block">
@@ -1685,18 +2940,28 @@ function openManageDrawer(kind, row) {
   stopManageLogs();
   stopManageExec();
   state.manage.selected = row;
+  state.manage.revealSecrets = false;
+  el.manageYamlReveal.checked = false;
   el.manageDrawer.classList.add('open');
-  el.manageDrawerTitle.textContent = row.name || '—';
+  // In CRD mode, append the Kind+group so two same-named resources under different API groups
+  // (e.g. Traefik's Middleware in both traefik.io and traefik.containo.us) aren't ambiguous here.
+  el.manageDrawerTitle.textContent = (state.manage.mode === 'crd' && state.manage.activeCrd)
+    ? `${row.name || '—'}  ·  ${state.manage.activeCrd.kind} (${state.manage.activeCrd.group || '(core)'})`
+    : (row.name || '—');
   renderManageDetail(kind, row);
+  renderManageDrawerActions(kind, row);
 
-  const isPod = kind === 'pods';
-  const isMetricsKind = MANAGE_METRICS_KINDS.includes(kind);
+  const isPod = kind === 'pods' && state.manage.mode === 'kind';
+  const isMetricsKind = state.manage.mode === 'kind' && MANAGE_METRICS_KINDS.includes(kind) && state.manage.enableMetrics;
   const logsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="logs"]');
   const execTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="exec"]');
+  const pfTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="portforward"]');
   const metricsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="metrics"]');
   logsTabBtn.style.display = isPod ? '' : 'none';
   execTabBtn.style.display = isPod ? '' : 'none';
+  pfTabBtn.style.display = isPod ? '' : 'none';
   metricsTabBtn.style.display = isMetricsKind ? '' : 'none';
+  el.manageYamlRevealLabel.style.display = (state.manage.mode === 'kind' && kind === 'secrets') ? '' : 'none';
   if (isPod) {
     populateManageLogContainerPicker(row.containers || []);
     populateManageExecContainerPicker(row.containers || []);
@@ -1709,13 +2974,14 @@ function closeManageDrawer() {
   stopManageLogs();
   stopManageExec();
   state.manage.selected = null;
+  state.manage.revealSecrets = false;
   el.manageDrawer.classList.remove('open');
 }
 
 el.manageDrawerClose.addEventListener('click', closeManageDrawer);
 
 function renderManageDetail(kind, row) {
-  const cols = (MANAGE_COLUMN_DEFS[kind] || MANAGE_COLUMN_DEFS.pods).filter((c) => !c.spark);
+  const cols = getManageColumns(kind).filter((c) => !c.spark);
   el.manageDetailPane.innerHTML = cols.map((c) => {
     const val = c.age ? relAge(row[c.key]) : row[c.key];
     return `
@@ -1726,6 +2992,143 @@ function renderManageDetail(kind, row) {
   }).join('');
 }
 
+/* ── K8s Manage: safe resource actions ────────────────────────────────────── */
+
+// Fixed, per-kind action set — mirrors the allow-list enforced server-side in main.js.
+function getManageActionsFor(kind, row) {
+  const actions = [];
+  if (['deployments', 'statefulsets', 'daemonsets'].includes(kind)) {
+    actions.push({ action: 'restart', label: 'Restart' });
+  }
+  if (['deployments', 'statefulsets'].includes(kind)) {
+    actions.push({ action: 'scale', label: 'Scale' });
+  }
+  if (kind === 'nodes') {
+    actions.push(row.unschedulable
+      ? { action: 'uncordon', label: 'Uncordon' }
+      : { action: 'cordon', label: 'Cordon' });
+  }
+  actions.push({ action: 'delete', label: 'Delete', danger: true });
+  return actions;
+}
+
+function renderManageDrawerActions(kind, row) {
+  const actions = getManageActionsFor(kind, row);
+  el.manageDrawerActions.innerHTML = actions
+    .map((a) => `<button class="btn btn-xs ${a.danger ? 'btn-danger' : 'btn-ghost'}" data-action="${a.action}">${escHtml(a.label)}</button>`)
+    .join('');
+  el.manageDrawerActions.querySelectorAll('button[data-action]').forEach((btn) => {
+    btn.addEventListener('click', () => runManageAction(kind, row, btn.dataset.action));
+  });
+}
+
+// Reusable confirm modal — supports a plain yes/no confirm, a type-the-name gate (delete), or a
+// numeric-input gate (scale). Resolves { ok:false } on cancel, { ok:true, value? } on confirm.
+function showManageConfirm({ title, body, danger, confirmLabel = 'Confirm', typedValue, numberInput }) {
+  return new Promise((resolve) => {
+    el.manageConfirmTitle.textContent = title;
+    el.manageConfirmBody.textContent = body;
+    el.manageConfirmOk.textContent = confirmLabel;
+    el.manageConfirmOk.classList.toggle('btn-danger', !!danger);
+    el.manageConfirmOk.classList.toggle('btn-primary', !danger);
+
+    const useNumber = !!numberInput;
+    el.manageConfirmInput.style.display = (typedValue || useNumber) ? '' : 'none';
+    el.manageConfirmInput.type = useNumber ? 'number' : 'text';
+    el.manageConfirmInput.min = useNumber ? '0' : '';
+    el.manageConfirmInput.placeholder = typedValue ? `Type "${typedValue}" to confirm` : (useNumber ? 'New replica count' : '');
+    el.manageConfirmInput.value = useNumber ? String(numberInput.current ?? 0) : '';
+
+    const updateOkState = () => {
+      if (typedValue) el.manageConfirmOk.disabled = el.manageConfirmInput.value !== typedValue;
+      else if (useNumber) {
+        const n = Number(el.manageConfirmInput.value);
+        el.manageConfirmOk.disabled = !Number.isInteger(n) || n < 0;
+      } else el.manageConfirmOk.disabled = false;
+    };
+    updateOkState();
+    el.manageConfirmInput.oninput = updateOkState;
+
+    el.manageConfirmOverlay.style.display = 'flex';
+    if (typedValue || useNumber) el.manageConfirmInput.focus();
+
+    const cleanup = (result) => {
+      el.manageConfirmOverlay.style.display = 'none';
+      el.manageConfirmOk.onclick = null;
+      el.manageConfirmCancel.onclick = null;
+      el.manageConfirmInput.oninput = null;
+      resolve(result);
+    };
+    el.manageConfirmCancel.onclick = () => cleanup({ ok: false });
+    el.manageConfirmOk.onclick = () => cleanup({ ok: true, value: useNumber ? Number(el.manageConfirmInput.value) : undefined });
+  });
+}
+
+const MANAGE_KIND_SINGULAR = {
+  pods: 'pod', deployments: 'deployment', statefulsets: 'statefulset', daemonsets: 'daemonset',
+  replicasets: 'replicaset', services: 'service', ingresses: 'ingress', configmaps: 'configmap',
+  secrets: 'secret', jobs: 'job', cronjobs: 'cronjob', pvcs: 'persistent volume claim',
+  hpas: 'horizontal pod autoscaler', nodes: 'node', pvs: 'persistent volume', namespaces: 'namespace', events: 'event',
+  serviceaccounts: 'service account', roles: 'role', rolebindings: 'role binding',
+  clusterroles: 'cluster role', clusterrolebindings: 'cluster role binding',
+  networkpolicies: 'network policy', storageclasses: 'storage class',
+  resourcequotas: 'resource quota', limitranges: 'limit range',
+};
+
+async function runManageAction(kind, row, action) {
+  let payload;
+  if (action === 'delete') {
+    const { ok } = await showManageConfirm({
+      title: `Delete ${row.name}?`,
+      body: `This permanently deletes this ${MANAGE_KIND_SINGULAR[kind] || kind}. Type its name to confirm.`,
+      danger: true,
+      confirmLabel: 'Delete',
+      typedValue: row.name,
+    });
+    if (!ok) return;
+  } else if (action === 'restart') {
+    const { ok } = await showManageConfirm({
+      title: `Restart rollout for ${row.name}?`,
+      body: 'This restarts every pod managed by this resource, one at a time.',
+      confirmLabel: 'Restart',
+    });
+    if (!ok) return;
+  } else if (action === 'scale') {
+    const current = row.ready ? Number(String(row.ready).split('/')[1]) || 0 : 0;
+    const { ok, value } = await showManageConfirm({
+      title: `Scale ${row.name}`,
+      body: 'Enter the new replica count.',
+      confirmLabel: 'Scale',
+      numberInput: { current },
+    });
+    if (!ok) return;
+    payload = { replicas: value };
+  } else if (action === 'cordon' || action === 'uncordon') {
+    const { ok } = await showManageConfirm({
+      title: `${action === 'cordon' ? 'Cordon' : 'Uncordon'} ${row.name}?`,
+      body: action === 'cordon'
+        ? 'Marks the node unschedulable — no new pods will be scheduled here.'
+        : 'Marks the node schedulable again.',
+      confirmLabel: action === 'cordon' ? 'Cordon' : 'Uncordon',
+    });
+    if (!ok) return;
+  }
+
+  const data = state.manage;
+  const result = data.mode === 'crd'
+    ? await window.k8sApi.customResourceAction(
+        data.kubeconfig, data.context, manageRowNamespace(row),
+        data.activeCrd.group, data.activeCrd.version, data.activeCrd.plural, row.name, data.activeCrd.namespaced, action
+      )
+    : await window.k8sApi.resourceAction(data.kubeconfig, data.context, manageRowNamespace(row), kind, row.name, action, payload);
+  if (!result.ok) {
+    alert(`Action failed: ${result.error}`);
+    return;
+  }
+  if (action === 'delete') closeManageDrawer();
+  refreshManageResources();
+}
+
 el.manageTabs.forEach((btn) => {
   btn.addEventListener('click', () => switchManageTab(btn.dataset.tab));
 });
@@ -1733,9 +3136,16 @@ el.manageTabs.forEach((btn) => {
 function switchManageTab(tab) {
   el.manageTabs.forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   el.manageDetailPane.style.display = tab === 'detail' ? '' : 'none';
+  el.manageYamlPane.style.display = tab === 'yaml' ? 'flex' : 'none';
+  el.manageEventsPane.style.display = tab === 'events' ? 'flex' : 'none';
+  el.manageAccessPane.style.display = tab === 'access' ? 'flex' : 'none';
   el.manageLogsPane.style.display = tab === 'logs' ? 'flex' : 'none';
   el.manageExecPane.style.display = tab === 'exec' ? 'flex' : 'none';
+  el.managePfPane.style.display = tab === 'portforward' ? 'flex' : 'none';
   el.manageMetricsPane.style.display = tab === 'metrics' ? 'flex' : 'none';
+  if (tab === 'yaml') loadManageYaml();
+  if (tab === 'events') loadManageEvents();
+  if (tab === 'access') loadManageAccess();
   if (tab === 'logs') {
     if (el.manageLogContainer.value) startManageLogs();
   } else {
@@ -1746,9 +3156,102 @@ function switchManageTab(tab) {
   } else {
     stopManageExec();
   }
+  // Port-forwards are independent background proxies, not tied to this pod/tab —
+  // switching away must NOT stop them, only refresh the list when switching in.
+  if (tab === 'portforward') {
+    renderManagePortForwardList();
+  }
   if (tab === 'metrics') {
     renderManageMetricsPane();
   }
+}
+
+// Fetches are one-shot (not polled); each captures the resource identity at request time and
+// drops the response if the user has since selected a different row/kind/namespace.
+async function loadManageYaml() {
+  const data = state.manage;
+  const row = data.selected;
+  if (!row) return;
+  el.manageYamlOutput.textContent = 'Loading…';
+
+  if (data.mode === 'crd') {
+    const crd = data.activeCrd;
+    const result = await window.k8sApi.getCustomResourceYaml(
+      data.kubeconfig, data.context, manageRowNamespace(row), crd.group, crd.version, crd.plural, row.name, crd.namespaced
+    );
+    if (data.selected !== row) return;
+    el.manageYamlOutput.textContent = result.ok ? result.yaml : `Error: ${result.error}`;
+    return;
+  }
+
+  const kind = data.resourceType;
+  const result = await window.k8sApi.getResourceYaml(
+    data.kubeconfig, data.context, manageRowNamespace(row), kind, row.name, { reveal: data.revealSecrets }
+  );
+  if (data.selected !== row || data.resourceType !== kind) return;
+  el.manageYamlOutput.textContent = result.ok ? result.yaml : `Error: ${result.error}`;
+}
+
+el.manageYamlCopy.addEventListener('click', () => {
+  navigator.clipboard.writeText(el.manageYamlOutput.textContent || '');
+});
+
+el.manageYamlReveal.addEventListener('change', () => {
+  state.manage.revealSecrets = el.manageYamlReveal.checked;
+  loadManageYaml();
+});
+
+async function loadManageEvents() {
+  const data = state.manage;
+  const row = data.selected;
+  if (!row) return;
+  el.manageEventsThead.innerHTML = `<tr>${MANAGE_EVENTS_PANE_COLUMNS.map((c) => `<th>${escHtml(c.label)}</th>`).join('')}</tr>`;
+  el.manageEventsTbody.innerHTML = `<tr><td colspan="${MANAGE_EVENTS_PANE_COLUMNS.length}" class="manage-empty">Loading…</td></tr>`;
+
+  let result;
+  if (data.mode === 'crd') {
+    const crd = data.activeCrd;
+    result = await window.k8sApi.getCustomResourceEvents(data.kubeconfig, data.context, manageRowNamespace(row), crd.kind, row.name, crd.namespaced);
+  } else {
+    result = await window.k8sApi.getResourceEvents(data.kubeconfig, data.context, manageRowNamespace(row), data.resourceType, row.name);
+  }
+  if (data.selected !== row) return;
+  if (!result.ok) {
+    el.manageEventsTbody.innerHTML = `<tr><td colspan="${MANAGE_EVENTS_PANE_COLUMNS.length}" class="manage-empty">${escHtml(result.error)}</td></tr>`;
+    return;
+  }
+  if (result.rows.length === 0) {
+    el.manageEventsTbody.innerHTML = `<tr><td colspan="${MANAGE_EVENTS_PANE_COLUMNS.length}" class="manage-empty">No events</td></tr>`;
+    return;
+  }
+  el.manageEventsTbody.innerHTML = result.rows.map((row) => `
+    <tr>${MANAGE_EVENTS_PANE_COLUMNS.map((c) => {
+      const val = row[c.key];
+      return `<td>${escHtml(c.age ? relAge(val) : (val ?? ''))}</td>`;
+    }).join('')}</tr>`).join('');
+}
+
+async function loadManageAccess() {
+  const data = state.manage;
+  const kind = data.resourceType;
+  const row = data.selected;
+  if (!row || data.mode === 'crd') {
+    el.manageAccessTbody.innerHTML = `<tr><td colspan="3" class="manage-empty">Not available for custom resources</td></tr>`;
+    return;
+  }
+  el.manageAccessTbody.innerHTML = `<tr><td colspan="3" class="manage-empty">Checking…</td></tr>`;
+  const result = await window.k8sApi.checkAccess(data.kubeconfig, data.context, manageRowNamespace(row), kind, row.name);
+  if (data.selected !== row || data.resourceType !== kind) return;
+  if (!result.ok) {
+    el.manageAccessTbody.innerHTML = `<tr><td colspan="3" class="manage-empty">${escHtml(result.error)}</td></tr>`;
+    return;
+  }
+  el.manageAccessTbody.innerHTML = result.rows.map((r) => `
+    <tr>
+      <td>${escHtml(r.verb)}</td>
+      <td><span class="status-pill ${r.allowed ? 'manage-status-running' : 'manage-status-error'}">${r.allowed ? 'Allowed' : 'Denied'}</span></td>
+      <td>${escHtml(r.reason)}</td>
+    </tr>`).join('');
 }
 
 function populateManageLogContainerPicker(containers) {
@@ -1785,7 +3288,7 @@ el.manageLogFollow.addEventListener('change', () => {
   if (el.manageLogFollow.checked) el.manageLogOutput.scrollTop = el.manageLogOutput.scrollHeight;
 });
 
-el.manageLogClear.addEventListener('click', () => { el.manageLogOutput.textContent = ''; });
+el.manageLogClear.addEventListener('click', () => { el.manageLogOutput.textContent = ''; _logLineCount = 0; });
 
 // User scrolling away from the bottom while following turns follow-tail off —
 // scrolling back down does not turn it back on, matching Lens/kubectl-like UX.
@@ -1806,6 +3309,7 @@ function startManageLogs() {
 
   const sid = crypto.randomUUID();
   el.manageLogOutput.textContent = '';
+  _logLineCount = 0;
 
   // Subscribe before starting the stream so the first chunks can't race past us.
   const disposers = [
@@ -1817,7 +3321,7 @@ function startManageLogs() {
 
   const tailLines = parseInt(el.manageLogTail.value, 10) || 500;
   window.k8sApi.startPodLogs(
-    data.kubeconfig, data.context, data.namespace, row.name, container,
+    data.kubeconfig, data.context, manageRowNamespace(row), row.name, container,
     { follow: true, tailLines, timestamps: false },
     sid
   );
@@ -1831,12 +3335,18 @@ function stopManageLogs() {
   state.manage.logSession = null;
 }
 
+let _logLineCount = 0;
+
 function appendLogBatch(text) {
   const shouldFollow = el.manageLogFollow.checked;
+  _logLineCount += (text.match(/\n/g) || []).length;
   el.manageLogOutput.textContent += text;
-  const lines = el.manageLogOutput.textContent.split('\n');
-  if (lines.length > MANAGE_LOG_MAX_LINES) {
+  // Only do the expensive split/join when we've accumulated 20% over the limit —
+  // avoids re-parsing the entire log buffer on every single chunk.
+  if (_logLineCount > MANAGE_LOG_MAX_LINES * 1.2) {
+    const lines = el.manageLogOutput.textContent.split('\n');
     el.manageLogOutput.textContent = lines.slice(-MANAGE_LOG_MAX_LINES).join('\n');
+    _logLineCount = MANAGE_LOG_MAX_LINES;
   }
   if (shouldFollow) el.manageLogOutput.scrollTop = el.manageLogOutput.scrollHeight;
 }
@@ -1886,7 +3396,7 @@ function startManageExec() {
 
   data.execSession = { sid, term, fitAddon, resizeObserver, dataDisposable, disposers };
 
-  window.k8sApi.startExec(data.kubeconfig, data.context, data.namespace, row.name, container, sid)
+  window.k8sApi.startExec(data.kubeconfig, data.context, manageRowNamespace(row), row.name, container, sid)
     .then((res) => {
       if (!data.execSession || data.execSession.sid !== sid) return; // superseded/stopped while connecting
       if (res && res.ok) {
@@ -1908,6 +3418,72 @@ function stopManageExec() {
   session.term.dispose();
   state.manage.execSession = null;
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   K8S MANAGE — port-forward
+   Forwards are independent background proxies, keyed by sid in state.manage.portForwards.
+   Unlike logs/exec they are NOT tied to the drawer/tab/selected pod — they keep running
+   while browsing other resources and are only stopped explicitly or at the teardown choke point.
+   ════════════════════════════════════════════════════════════════════════════ */
+async function startManagePortForward() {
+  const data = state.manage;
+  const row = data.selected;
+  if (!row) return;
+  const targetPort = Number(el.managePfTargetPort.value);
+  if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+    alert('Enter a valid pod port (1-65535).');
+    return;
+  }
+  const localPort = el.managePfLocalPort.value ? Number(el.managePfLocalPort.value) : 0;
+
+  const sid = crypto.randomUUID();
+  const disposer = window.k8sApi.onPortForwardError(sid, (msg) => {
+    alert(`Port-forward error: ${msg}`);
+    stopManagePortForward(sid);
+  });
+
+  const result = await window.k8sApi.startPortForward(data.kubeconfig, data.context, manageRowNamespace(row), row.name, targetPort, localPort, sid);
+  if (!result.ok) {
+    disposer();
+    alert(`Failed to start port-forward: ${result.error}`);
+    return;
+  }
+  data.portForwards.set(sid, { sid, pod: row.name, targetPort, localPort: result.localPort, disposer });
+  el.managePfTargetPort.value = '';
+  el.managePfLocalPort.value = '';
+  renderManagePortForwardList();
+}
+
+function stopManagePortForward(sid) {
+  const session = state.manage.portForwards.get(sid);
+  if (!session) return;
+  window.k8sApi.stopPortForward(sid);
+  session.disposer();
+  state.manage.portForwards.delete(sid);
+  renderManagePortForwardList();
+}
+
+function stopAllManagePortForwards() {
+  for (const sid of Array.from(state.manage.portForwards.keys())) stopManagePortForward(sid);
+}
+
+function renderManagePortForwardList() {
+  const forwards = Array.from(state.manage.portForwards.values());
+  if (forwards.length === 0) {
+    el.managePfList.innerHTML = '<div class="manage-empty">No active port-forwards</div>';
+    return;
+  }
+  el.managePfList.innerHTML = forwards.map((f) => `
+    <div class="manage-pf-row">
+      <span class="manage-pf-desc">localhost:${escHtml(f.localPort)} → ${escHtml(f.pod)}:${escHtml(f.targetPort)}</span>
+      <button class="btn btn-xs btn-ghost" data-sid="${escHtml(f.sid)}">Stop</button>
+    </div>`).join('');
+  el.managePfList.querySelectorAll('button[data-sid]').forEach((btn) => {
+    btn.addEventListener('click', () => stopManagePortForward(btn.dataset.sid));
+  });
+}
+
+el.managePfStart.addEventListener('click', startManagePortForward);
 
 /* ════════════════════════════════════════════════════════════════════════════
    TOKEN EXPIRY COUNTDOWN

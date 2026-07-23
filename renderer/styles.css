@@ -173,6 +173,14 @@ body {
 .btn-ghost { background: transparent; border-color: transparent; color: var(--text-dim); }
 .btn-ghost:hover { background: var(--bg-hover); color: var(--text); }
 
+.btn-danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled) { background: #d63c3c; }
+.btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .btn-sm { padding: 4px 10px; font-size: 11px; }
 
 /* ── Badges ──────────────────────────────────────────────────────────────── */
@@ -1278,6 +1286,38 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   min-height: 18px;
 }
 
+/* ── K8s Manage: action confirm overlay (mirrors .auth-overlay/.auth-card) ─── */
+.manage-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 17, 23, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 210;
+  backdrop-filter: blur(6px);
+}
+
+.manage-confirm-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 32px;
+  max-width: 380px;
+  width: 100%;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+.manage-confirm-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.manage-confirm-body { font-size: 12px; color: var(--text-dim); line-height: 1.6; margin: 0; }
+.manage-confirm-input { width: 100%; }
+.manage-confirm-actions { display: flex; gap: 10px; }
+
 /* ── K8s Manage: cluster picker footer ───────────────────────────────────── */
 .cs-footer-actions {
   display: flex;
@@ -1293,6 +1333,24 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   min-height: 0;
 }
 
+.manage-resize-handle {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s;
+}
+.manage-resize-handle:hover,
+.manage-resize-handle.active {
+  background: var(--accent);
+  opacity: 0.5;
+}
+.manage-resize-handle.active {
+  opacity: 0.8;
+}
+
 .manage-sidebar {
   width: 170px;
   flex-shrink: 0;
@@ -1303,6 +1361,7 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   flex-direction: column;
   gap: 2px;
   overflow-y: auto;
+  position: relative;
 }
 
 .manage-nav-item {
@@ -1332,6 +1391,7 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 
 .manage-header {
@@ -1352,6 +1412,82 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   gap: 10px;
   margin-left: auto;
   flex-shrink: 0;
+}
+.manage-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.manage-sidebar-header .manage-nav-item { flex: 1; }
+
+.manage-settings-btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.12s;
+}
+.manage-settings-btn:hover { background: var(--bg-hover); border-color: var(--border); }
+
+.manage-settings-popover {
+  position: absolute;
+  top: 44px;
+  left: 8px;
+  right: 8px;
+  z-index: 200;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.manage-settings-section {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.manage-settings-section:last-child { border-bottom: none; }
+.manage-settings-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.manage-settings-section-title input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.manage-settings-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0 3px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.manage-settings-item:hover { color: var(--text); }
+.manage-settings-item input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
 }
 
 .manage-refresh-status {
@@ -1392,6 +1528,12 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+.manage-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .manage-drawer-tabs {
@@ -1445,6 +1587,85 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   font-size: 12px;
   color: var(--text);
   word-break: break-all;
+}
+
+.manage-yaml-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.manage-yaml-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.manage-yaml-output {
+  flex: 1;
+  margin: 0;
+  padding: 10px 14px;
+  overflow: auto;
+  background: var(--bg-base);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre;
+}
+.manage-yaml-output::-webkit-scrollbar { width: 6px; height: 6px; }
+.manage-yaml-output::-webkit-scrollbar-track { background: transparent; }
+.manage-yaml-output::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.manage-events-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.manage-pf-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.manage-pf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.manage-pf-toolbar input[type="number"] { width: 100px; }
+
+.manage-pf-list {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 14px;
+}
+
+.manage-pf-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.manage-pf-desc {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .manage-logs-pane {
@@ -1567,3 +1788,340 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
 .status-pill.manage-status-running { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); border: 1px solid var(--green); }
 .status-pill.manage-status-pending { background: var(--missing-bg); color: var(--missing-text); border: 1px solid var(--missing-border); }
 .status-pill.manage-status-error   { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); border: 1px solid var(--red); }
+
+/* ── K8s Manage: sidebar section dividers + CRD browser (Phase 9) ─────────── */
+.manage-nav-divider {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: 12px 8px 2px;
+}
+.manage-nav-divider:first-of-type { padding-top: 4px; }
+
+.manage-crd-filter {
+  width: 100%;
+  margin: 2px 0 4px;
+  padding: 5px 8px;
+  font-size: 11px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.manage-crd-filter:focus { border-color: var(--accent); }
+
+.manage-crd-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.manage-crd-list::-webkit-scrollbar { width: 5px; }
+.manage-crd-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Collapsible tree node per API group — the CRD's actual parent — one level nested under the
+   "Custom Resources" section divider. Disambiguates CRDs that share a Kind name across groups
+   (e.g. Traefik's traefik.io vs traefik.containo.us) and lets long lists collapse out of the way. */
+.manage-crd-group-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  margin-top: 3px;
+  padding: 5px 6px 5px 2px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+.manage-crd-group-header:first-child { margin-top: 0; }
+.manage-crd-group-header:hover { background: var(--bg-hover); color: var(--text-dim); }
+
+.manage-crd-group-caret {
+  flex-shrink: 0;
+  transition: transform 0.1s;
+  transform: rotate(90deg);
+}
+.manage-crd-group-header.collapsed .manage-crd-group-caret { transform: rotate(0deg); }
+
+.manage-crd-group-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.manage-crd-group-count {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+/* CRD items are the tree's leaves — indent them under their group header with a vertical
+   connector so the parent/child relationship reads visually, not just via proximity. */
+.manage-crd-item {
+  position: relative;
+  margin-left: 14px;
+  padding-left: 10px !important;
+  border-left: 1px solid var(--border);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0 !important;
+}
+
+.manage-empty-hint {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── K8s Manage: Secret reveal toggle (Phase 8.1) ─────────────────────────── */
+.manage-yaml-reveal-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-right: auto;
+  cursor: pointer;
+}
+
+.manage-access-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── K8s Manage: search row / global search (Phase 10.2) ──────────────────── */
+.manage-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.manage-search-row input[type="text"] { flex: 1; min-width: 0; }
+
+.manage-search-results {
+  position: absolute;
+  top: 56px;
+  right: 16px;
+  width: 420px;
+  max-height: 60vh;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  overflow: hidden;
+}
+
+.manage-search-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.manage-search-results-body {
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.manage-search-results-body::-webkit-scrollbar { width: 6px; }
+.manage-search-results-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.manage-search-result-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-dim);
+}
+.manage-search-result-row:hover { background: var(--bg-hover); }
+
+.manage-search-result-kind {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.manage-search-result-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.manage-search-errors {
+  padding: 8px 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* "You are here" label above the table — disambiguates CRDs that share a Kind name
+   across different API groups (see manage-crd-group-header). */
+.manage-kind-title {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg-surface2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* ── K8s Manage: bulk actions (Phase 10.1) ─────────────────────────────────── */
+.manage-bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--accent-dim);
+  border-bottom: 1px solid var(--accent);
+  flex-shrink: 0;
+}
+
+.manage-bulk-count { font-size: 12px; font-weight: 600; color: var(--text); }
+.manage-bulk-actions { display: flex; gap: 8px; }
+
+.manage-bulk-result {
+  padding: 8px 16px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.manage-bulk-result-ok { color: var(--green); }
+.manage-bulk-result-partial { color: var(--red); }
+
+.manage-select-col { width: 28px; text-align: center; }
+.manage-select-col input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); }
+
+/* ── K8s Manage: cluster overview (Phase 10.3) ─────────────────────────────── */
+.manage-overview-pane {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  padding: 16px;
+  overflow: auto;
+  align-content: start;
+}
+
+.manage-overview-tile {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.manage-overview-tile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.manage-overview-tile-title { font-size: 12px; font-weight: 600; color: var(--text); }
+.manage-overview-tile-count { font-family: var(--font-mono); font-size: 16px; font-weight: 700; color: var(--green); }
+.manage-overview-tile-count-bad { color: var(--red); }
+
+.manage-overview-tile-list {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.manage-overview-tile-list::-webkit-scrollbar { width: 5px; }
+.manage-overview-tile-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.manage-overview-tile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.manage-overview-tile-row:hover { background: var(--bg-hover); }
+.manage-overview-tile-row-name { font-family: var(--font-mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manage-overview-tile-row-sub { flex-shrink: 0; color: var(--text-muted); }
+
+.manage-overview-tile-empty {
+  padding: 10px 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── K8s Diff: Full Manifest tab (Phase 11) ────────────────────────────────── */
+.diff-view-tabs { padding-left: 0; margin: 0 24px; }
+
+.env-diff-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.manifest-diff-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin: 0 24px 16px;
+}
+
+.manifest-diff-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 0;
+  flex-shrink: 0;
+}
+
+.manifest-diff-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.manifest-diff-output {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.manifest-diff-output::-webkit-scrollbar { width: 6px; height: 6px; }
+.manifest-diff-output::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.manifest-diff-line { padding: 0 10px; white-space: pre-wrap; word-break: break-all; }
+.manifest-diff-line-added   { background: color-mix(in srgb, var(--green) 12%, transparent); color: var(--green); }
+.manifest-diff-line-removed { background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
+.manifest-diff-line-same    { color: var(--text-dim); }
+
+.manifest-diff-single { padding: 10px; margin: 0; white-space: pre-wrap; }

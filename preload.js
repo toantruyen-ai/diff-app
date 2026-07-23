@@ -22,6 +22,32 @@ contextBridge.exposeInMainWorld('k8sApi', {
 
   listResource: (ref, ctx, ns, kind) => ipcRenderer.invoke('list-resource', ref, ctx, ns, kind),
   getMetrics: (ref, ctx, ns, scope) => ipcRenderer.invoke('get-metrics', ref, ctx, ns, scope),
+  getResourceYaml: (ref, ctx, ns, kind, name, opts) => ipcRenderer.invoke('get-resource-yaml', ref, ctx, ns, kind, name, opts),
+  getResourceEvents: (ref, ctx, ns, kind, name) => ipcRenderer.invoke('get-resource-events', ref, ctx, ns, kind, name),
+  resourceAction: (ref, ctx, ns, kind, name, action, payload) =>
+    ipcRenderer.invoke('resource-action', ref, ctx, ns, kind, name, action, payload),
+  checkAccess: (ref, ctx, ns, kind, name) => ipcRenderer.invoke('check-access', ref, ctx, ns, kind, name),
+  searchResources: (ref, ctx, ns, query) => ipcRenderer.invoke('search-resources', ref, ctx, ns, query),
+  getManageOverview: (ref, ctx) => ipcRenderer.invoke('get-manage-overview', ref, ctx),
+
+  listCrds: (ref, ctx) => ipcRenderer.invoke('list-crds', ref, ctx),
+  listCustomResource: (ref, ctx, ns, group, version, plural, namespaced) =>
+    ipcRenderer.invoke('list-custom-resource', ref, ctx, ns, group, version, plural, namespaced),
+  getCustomResourceYaml: (ref, ctx, ns, group, version, plural, name, namespaced) =>
+    ipcRenderer.invoke('get-custom-resource-yaml', ref, ctx, ns, group, version, plural, name, namespaced),
+  getCustomResourceEvents: (ref, ctx, ns, kindLabel, name, namespaced) =>
+    ipcRenderer.invoke('get-custom-resource-events', ref, ctx, ns, kindLabel, name, namespaced),
+  customResourceAction: (ref, ctx, ns, group, version, plural, name, namespaced, action) =>
+    ipcRenderer.invoke('custom-resource-action', ref, ctx, ns, group, version, plural, name, namespaced, action),
+
+  startPortForward: (ref, ctx, ns, pod, targetPort, localPort, sid) =>
+    ipcRenderer.invoke('pf-start', ref, ctx, ns, pod, targetPort, localPort, sid),
+  stopPortForward: (sid) => ipcRenderer.invoke('pf-stop', sid),
+  onPortForwardError: (sid, cb) => {
+    const handler = (_e, msg) => cb(msg);
+    ipcRenderer.on(`pf-error:${sid}`, handler);
+    return () => ipcRenderer.removeListener(`pf-error:${sid}`, handler);
+  },
 
   startPodLogs: (ref, ctx, ns, pod, container, opts, sid) =>
     ipcRenderer.invoke('start-pod-logs', ref, ctx, ns, pod, container, opts, sid),

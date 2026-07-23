@@ -254,56 +254,75 @@
         </div>
       </div>
 
-      <!-- Filter bar -->
-      <div class="filter-bar" id="filter-bar" style="display:none">
-        <div class="filter-left">
-          <input type="text" id="search-input" placeholder="Filter by key name…" />
-          <div class="filter-toggles">
-            <button class="toggle-btn active" id="filter-all" data-filter="all">All</button>
-            <button class="toggle-btn" id="filter-diff" data-filter="diff">
-              <span class="dot dot-diff"></span> Different
-            </button>
-            <button class="toggle-btn" id="filter-same" data-filter="same">
-              <span class="dot dot-same"></span> Same
-            </button>
-            <button class="toggle-btn" id="filter-missing" data-filter="missing">
-              <span class="dot dot-missing"></span> Missing
-            </button>
+      <!-- Diff view tab strip: Env Vars (default) / Full Manifest -->
+      <nav class="manage-drawer-tabs diff-view-tabs" id="diff-view-tabs">
+        <button class="manage-tab active" data-difftab="env">Env Vars</button>
+        <button class="manage-tab" data-difftab="manifest">Full Manifest</button>
+      </nav>
+
+      <div id="env-diff-pane" class="env-diff-pane">
+        <!-- Filter bar -->
+        <div class="filter-bar" id="filter-bar" style="display:none">
+          <div class="filter-left">
+            <input type="text" id="search-input" placeholder="Filter by key name…" />
+            <div class="filter-toggles">
+              <button class="toggle-btn active" id="filter-all" data-filter="all">All</button>
+              <button class="toggle-btn" id="filter-diff" data-filter="diff">
+                <span class="dot dot-diff"></span> Different
+              </button>
+              <button class="toggle-btn" id="filter-same" data-filter="same">
+                <span class="dot dot-same"></span> Same
+              </button>
+              <button class="toggle-btn" id="filter-missing" data-filter="missing">
+                <span class="dot dot-missing"></span> Missing
+              </button>
+            </div>
+          </div>
+          <div class="filter-right">
+            <div class="stats" id="stats"></div>
+            <label class="toggle-secrets">
+              <input type="checkbox" id="toggle-mask" checked />
+              Mask secret values
+            </label>
           </div>
         </div>
-        <div class="filter-right">
-          <div class="stats" id="stats"></div>
-          <label class="toggle-secrets">
-            <input type="checkbox" id="toggle-mask" checked />
-            Mask secret values
-          </label>
+
+        <!-- Comparison table -->
+        <div class="table-wrapper" id="table-wrapper">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-icon"><img src="../logo.png" alt="" /></div>
+            <p>Select deployments from both sides and click <strong>Compare</strong></p>
+          </div>
+          <table class="diff-table" id="diff-table" style="display:none">
+            <thead>
+              <tr>
+                <th class="col-key">ENV Key</th>
+                <th class="col-source">Source</th>
+                <th class="col-value col-a">
+                  <span class="badge badge-left">A</span>
+                  <span id="th-left-label">—</span>
+                </th>
+                <th class="col-value col-b">
+                  <span class="badge badge-right">B</span>
+                  <span id="th-right-label">—</span>
+                </th>
+                <th class="col-status">Status</th>
+              </tr>
+            </thead>
+            <tbody id="diff-body"></tbody>
+          </table>
         </div>
       </div>
 
-      <!-- Comparison table -->
-      <div class="table-wrapper" id="table-wrapper">
-        <div class="empty-state" id="empty-state">
-          <div class="empty-icon"><img src="../logo.png" alt="" /></div>
-          <p>Select deployments from both sides and click <strong>Compare</strong></p>
+      <!-- Full-manifest diff pane (Phase 11) -->
+      <div id="manifest-diff-pane" class="manifest-diff-pane" style="display:none">
+        <div class="manifest-diff-toolbar">
+          <label class="manifest-diff-toggle">
+            <input type="checkbox" id="manifest-diff-hide-status" checked />
+            Hide status differences
+          </label>
         </div>
-        <table class="diff-table" id="diff-table" style="display:none">
-          <thead>
-            <tr>
-              <th class="col-key">ENV Key</th>
-              <th class="col-source">Source</th>
-              <th class="col-value col-a">
-                <span class="badge badge-left">A</span>
-                <span id="th-left-label">—</span>
-              </th>
-              <th class="col-value col-b">
-                <span class="badge badge-right">B</span>
-                <span id="th-right-label">—</span>
-              </th>
-              <th class="col-status">Status</th>
-            </tr>
-          </thead>
-          <tbody id="diff-body"></tbody>
-        </table>
+        <div id="manifest-diff-output" class="manifest-diff-output"></div>
       </div>
 
     </div><!-- /#k8s-diff-view -->
@@ -421,16 +440,92 @@
     <!-- ── K8s Manage: workspace ───────────────────────────────────────────── -->
     <div id="manage-view" class="manage-view" style="display:none">
       <aside id="manage-sidebar" class="manage-sidebar">
-        <button class="manage-nav-item active" data-kind="pods">Pods</button>
+        <div class="manage-sidebar-header">
+          <button class="manage-nav-item active" data-kind="overview">Overview</button>
+          <button id="manage-settings-btn" class="manage-settings-btn" title="Settings">⚙️</button>
+        </div>
+
+        <!-- Settings Popover -->
+        <div id="manage-settings-popover" class="manage-settings-popover" style="display:none">
+          <div class="manage-settings-section">
+            <div class="manage-settings-section-title">Performance</div>
+            <label class="manage-settings-item"><input type="checkbox" id="manage-setting-metrics" /> Metrics (CPU/Memory)</label>
+            <label class="manage-settings-item"><input type="checkbox" id="manage-setting-autorefresh" /> Auto-Poll</label>
+          </div>
+          <div class="manage-settings-section">
+            <div class="manage-settings-section-title">Workloads <input type="checkbox" data-settings-group="workloads" /></div>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="pods" /> Pods</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="deployments" /> Deployments</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="statefulsets" /> StatefulSets</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="daemonsets" /> DaemonSets</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="replicasets" /> ReplicaSets</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="jobs" /> Jobs</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="cronjobs" /> CronJobs</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="services" /> Services</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="ingresses" /> Ingresses</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="configmaps" /> ConfigMaps</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="secrets" /> Secrets</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="hpas" /> HPAs</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="nodes" /> Nodes</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="pvs" /> PVs</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="namespaces" /> Namespaces</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="events" /> Events</label>
+          </div>
+          <div class="manage-settings-section">
+            <div class="manage-settings-section-title">RBAC <input type="checkbox" data-settings-group="rbac" /></div>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="serviceaccounts" /> ServiceAccounts</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="roles" /> Roles</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="rolebindings" /> RoleBindings</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="clusterroles" /> ClusterRoles</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="clusterrolebindings" /> ClusterRoleBindings</label>
+          </div>
+          <div class="manage-settings-section">
+            <div class="manage-settings-section-title">Policy &amp; Storage <input type="checkbox" data-settings-group="policy" /></div>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="networkpolicies" /> NetworkPolicies</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="storageclasses" /> StorageClasses</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="resourcequotas" /> ResourceQuotas</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="limitranges" /> LimitRanges</label>
+            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="pvcs" /> PVCs</label>
+          </div>
+          <div class="manage-settings-section">
+            <div class="manage-settings-section-title">Custom Resources <input type="checkbox" data-settings-group="crd" /></div>
+          </div>
+        </div>
+        <div class="manage-nav-divider">Workloads</div>
+        <button class="manage-nav-item" data-kind="pods">Pods</button>
         <button class="manage-nav-item" data-kind="deployments">Deployments</button>
         <button class="manage-nav-item" data-kind="statefulsets">StatefulSets</button>
         <button class="manage-nav-item" data-kind="daemonsets">DaemonSets</button>
+        <button class="manage-nav-item" data-kind="replicasets">ReplicaSets</button>
+        <button class="manage-nav-item" data-kind="jobs">Jobs</button>
+        <button class="manage-nav-item" data-kind="cronjobs">CronJobs</button>
         <button class="manage-nav-item" data-kind="services">Services</button>
+        <button class="manage-nav-item" data-kind="ingresses">Ingresses</button>
         <button class="manage-nav-item" data-kind="configmaps">ConfigMaps</button>
         <button class="manage-nav-item" data-kind="secrets">Secrets</button>
+        <button class="manage-nav-item" data-kind="hpas">HPAs</button>
         <button class="manage-nav-item" data-kind="nodes">Nodes</button>
+        <button class="manage-nav-item" data-kind="pvs">PVs</button>
+        <button class="manage-nav-item" data-kind="namespaces">Namespaces</button>
         <button class="manage-nav-item" data-kind="events">Events</button>
+        <div class="manage-nav-divider">RBAC</div>
+        <button class="manage-nav-item" data-kind="serviceaccounts">ServiceAccounts</button>
+        <button class="manage-nav-item" data-kind="roles">Roles</button>
+        <button class="manage-nav-item" data-kind="rolebindings">RoleBindings</button>
+        <button class="manage-nav-item" data-kind="clusterroles">ClusterRoles</button>
+        <button class="manage-nav-item" data-kind="clusterrolebindings">ClusterRoleBindings</button>
+        <div class="manage-nav-divider">Policy &amp; Storage</div>
+        <button class="manage-nav-item" data-kind="networkpolicies">NetworkPolicies</button>
+        <button class="manage-nav-item" data-kind="storageclasses">StorageClasses</button>
+        <button class="manage-nav-item" data-kind="resourcequotas">ResourceQuotas</button>
+        <button class="manage-nav-item" data-kind="limitranges">LimitRanges</button>
+        <button class="manage-nav-item" data-kind="pvcs">PVCs</button>
+        <div class="manage-nav-divider">Custom Resources</div>
+        <input type="text" id="manage-crd-filter" class="manage-crd-filter" placeholder="Filter CRDs…" />
+        <div id="manage-crd-list" class="manage-crd-list"></div>
       </aside>
+
+      <div id="manage-resize-sidebar" class="manage-resize-handle"></div>
 
       <section class="manage-main">
         <header id="manage-header" class="manage-header">
@@ -448,13 +543,37 @@
           </div>
           <div class="field-group manage-search-group">
             <label>Filter</label>
-            <input type="text" id="manage-search" placeholder="Filter by name…" />
+            <div class="manage-search-row">
+              <input type="text" id="manage-search" placeholder="Filter by name…" />
+              <button id="manage-search-all-btn" class="btn btn-sm btn-ghost" title="Search across every kind (Enter)">Search all kinds</button>
+            </div>
           </div>
           <div class="manage-header-status">
             <span id="manage-refresh-status" class="manage-refresh-status"></span>
             <button id="manage-btn-refresh" class="btn btn-sm">↻ Refresh</button>
           </div>
         </header>
+
+        <div id="manage-kind-title" class="manage-kind-title" style="display:none"></div>
+
+        <div id="manage-bulk-bar" class="manage-bulk-bar" style="display:none">
+          <span id="manage-bulk-count" class="manage-bulk-count"></span>
+          <div class="manage-bulk-actions">
+            <button class="btn btn-xs btn-ghost" data-bulk-action="restart" style="display:none">Restart selected</button>
+            <button class="btn btn-xs btn-danger" data-bulk-action="delete">Delete selected</button>
+          </div>
+        </div>
+        <div id="manage-bulk-result" class="manage-bulk-result" style="display:none"></div>
+
+        <div id="manage-search-results" class="manage-search-results" style="display:none">
+          <div class="manage-search-results-header">
+            <span id="manage-search-results-title"></span>
+            <button id="manage-search-results-close" class="btn btn-ghost btn-xs">✕</button>
+          </div>
+          <div id="manage-search-results-body" class="manage-search-results-body"></div>
+        </div>
+
+        <div id="manage-overview-pane" class="manage-overview-pane" style="display:none"></div>
 
         <div id="manage-table-wrap" class="sdr-table-wrap">
           <table class="sdr-table">
@@ -464,18 +583,50 @@
         </div>
       </section>
 
+      <div id="manage-resize-drawer" class="manage-resize-handle"></div>
+
       <aside id="manage-drawer" class="manage-drawer">
         <header class="manage-drawer-header">
           <span id="manage-drawer-title" class="manage-drawer-title">—</span>
+          <div id="manage-drawer-actions" class="manage-actions"></div>
           <button id="manage-drawer-close" class="btn btn-ghost btn-xs">✕</button>
         </header>
         <nav class="manage-drawer-tabs">
           <button class="manage-tab active" data-tab="detail">Detail</button>
+          <button class="manage-tab" data-tab="yaml">YAML</button>
+          <button class="manage-tab" data-tab="events">Events</button>
+          <button class="manage-tab" data-tab="access">Access</button>
           <button class="manage-tab" data-tab="logs">Logs</button>
           <button class="manage-tab" data-tab="exec">Exec</button>
+          <button class="manage-tab" data-tab="portforward">Port-forward</button>
           <button class="manage-tab" data-tab="metrics">Metrics</button>
         </nav>
         <div id="manage-detail-pane" class="manage-detail-pane"></div>
+        <div id="manage-yaml-pane" class="manage-yaml-pane" style="display:none">
+          <div class="manage-yaml-toolbar">
+            <label id="manage-yaml-reveal-label" class="manage-yaml-reveal-label" style="display:none">
+              <input type="checkbox" id="manage-yaml-reveal" /> Reveal secret values
+            </label>
+            <button id="manage-yaml-copy" class="btn btn-xs btn-ghost">Copy</button>
+          </div>
+          <pre id="manage-yaml-output" class="manage-yaml-output"></pre>
+        </div>
+        <div id="manage-events-pane" class="manage-events-pane" style="display:none">
+          <div class="sdr-table-wrap">
+            <table class="sdr-table">
+              <thead id="manage-events-thead"></thead>
+              <tbody id="manage-events-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="manage-access-pane" class="manage-access-pane" style="display:none">
+          <div class="sdr-table-wrap">
+            <table class="sdr-table">
+              <thead><tr><th>Verb</th><th>Allowed</th><th>Reason</th></tr></thead>
+              <tbody id="manage-access-tbody"></tbody>
+            </table>
+          </div>
+        </div>
         <div id="manage-logs-pane" class="manage-logs-pane" style="display:none">
           <div class="manage-log-toolbar">
             <select id="manage-log-container"></select>
@@ -494,8 +645,29 @@
           </div>
           <div id="manage-term" class="manage-term"></div>
         </div>
+        <div id="manage-pf-pane" class="manage-pf-pane" style="display:none">
+          <div class="manage-pf-toolbar">
+            <input type="number" id="manage-pf-target-port" placeholder="Pod port" min="1" max="65535" />
+            <input type="number" id="manage-pf-local-port" placeholder="Local port (optional)" min="1" max="65535" />
+            <button id="manage-pf-start" class="btn btn-xs btn-primary">Start forward</button>
+          </div>
+          <div id="manage-pf-list" class="manage-pf-list"></div>
+        </div>
         <div id="manage-metrics-pane" class="manage-metrics-pane" style="display:none"></div>
       </aside>
+    </div>
+
+    <!-- K8s Manage: action confirm overlay -->
+    <div class="manage-confirm-overlay" id="manage-confirm-overlay" style="display:none">
+      <div class="manage-confirm-card">
+        <div class="manage-confirm-title" id="manage-confirm-title"></div>
+        <p class="manage-confirm-body" id="manage-confirm-body"></p>
+        <input type="text" id="manage-confirm-input" class="manage-confirm-input" style="display:none" />
+        <div class="manage-confirm-actions">
+          <button id="manage-confirm-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+          <button id="manage-confirm-ok" class="btn btn-sm">Confirm</button>
+        </div>
+      </div>
     </div>
 
     <!-- Auth overlay -->
@@ -534,6 +706,7 @@
 
   <script src="vendor/xterm/xterm.js"></script>
   <script src="vendor/xterm/addon-fit.js"></script>
+  <script src="vendor/diff/diff.min.js"></script>
   <script src="app.js"></script>
 </body>
 
