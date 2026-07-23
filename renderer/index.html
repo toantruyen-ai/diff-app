@@ -29,6 +29,7 @@
         </svg>
         <span class="token-expiry-label">Token</span>
         <span id="token-countdown">--:--</span>
+        <button id="btn-token-reauth" class="btn-token-reauth" title="Re-authenticate / Login with Azure">🔄</button>
       </div>
       <div class="titlebar-actions" id="titlebar-actions" style="display:none">
         <button id="btn-compare" class="btn btn-primary" disabled>Compare</button>
@@ -141,7 +142,17 @@
           <div class="selector-grid" id="left-selector-grid">
             <!-- AKS mode: cluster name (hidden by default) -->
             <div class="field-group" id="left-aks-field" style="display:none">
-              <label>Cluster</label>
+              <div class="aks-label-row">
+                <label>Cluster</label>
+                <button class="btn btn-ghost btn-xs" id="left-btn-use-file" title="Switch to kubeconfig file">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                  Use file
+                </button>
+              </div>
               <div class="aks-cluster-display" id="left-aks-display">—</div>
             </div>
             <!-- File mode: kubeconfig picker -->
@@ -284,6 +295,8 @@
               <input type="checkbox" id="toggle-mask" checked />
               Mask secret values
             </label>
+            <button id="env-diff-export-csv" class="btn btn-xs btn-ghost">Export CSV</button>
+            <button id="env-diff-export-json" class="btn btn-xs btn-ghost">Export JSON</button>
           </div>
         </div>
 
@@ -317,10 +330,23 @@
       <!-- Full-manifest diff pane (Phase 11) -->
       <div id="manifest-diff-pane" class="manifest-diff-pane" style="display:none">
         <div class="manifest-diff-toolbar">
+          <label class="manifest-diff-kind-label">
+            Kind
+            <select id="manifest-diff-kind"></select>
+          </label>
+          <label class="manifest-diff-kind-label" id="manifest-diff-left-name-field" style="display:none">
+            A name
+            <select id="manifest-diff-left-name"></select>
+          </label>
+          <label class="manifest-diff-kind-label" id="manifest-diff-right-name-field" style="display:none">
+            B name
+            <select id="manifest-diff-right-name"></select>
+          </label>
           <label class="manifest-diff-toggle">
             <input type="checkbox" id="manifest-diff-hide-status" checked />
             Hide status differences
           </label>
+          <button id="manifest-diff-export" class="btn btn-xs btn-ghost">Export .diff</button>
         </div>
         <div id="manifest-diff-output" class="manifest-diff-output"></div>
       </div>
@@ -362,6 +388,8 @@
           <input type="text" id="sbdr-search" placeholder="Filter queue name…" />
         </div>
         <div class="sdr-stats" id="sbdr-stats"></div>
+        <button id="sbdr-export-csv" class="btn btn-xs btn-ghost">Export CSV</button>
+        <button id="sbdr-export-json" class="btn btn-xs btn-ghost">Export JSON</button>
       </div>
       <div class="sdr-table-wrap">
         <table class="sdr-table">
@@ -406,6 +434,8 @@
           <input type="text" id="sdr-search" placeholder="Filter container name…" />
         </div>
         <div class="sdr-stats" id="sdr-stats"></div>
+        <button id="sdr-export-csv" class="btn btn-xs btn-ghost">Export CSV</button>
+        <button id="sdr-export-json" class="btn btn-xs btn-ghost">Export JSON</button>
       </div>
       <div class="sdr-table-wrap">
         <table class="sdr-table">
@@ -443,6 +473,7 @@
         <div class="manage-sidebar-header">
           <button class="manage-nav-item active" data-kind="overview">Overview</button>
           <button id="manage-settings-btn" class="manage-settings-btn" title="Settings">⚙️</button>
+          <span id="manage-write-badge" class="manage-write-badge" title="Read-only — enable Audit in Settings to unlock write actions">🔒 Read-only</span>
         </div>
 
         <!-- Settings Popover -->
@@ -451,6 +482,30 @@
             <div class="manage-settings-section-title">Performance</div>
             <label class="manage-settings-item"><input type="checkbox" id="manage-setting-metrics" /> Metrics (CPU/Memory)</label>
             <label class="manage-settings-item"><input type="checkbox" id="manage-setting-autorefresh" /> Auto-Poll</label>
+          </div>
+          <div class="manage-settings-section">
+            <div class="manage-settings-section-title">Events Database</div>
+            <label class="manage-settings-item" title="Automatically watch K8s events and save to local SQLite"><input type="checkbox" id="manage-setting-event-capture" /> Auto-Capture Events</label>
+            <div class="manage-settings-sub-item">
+              <span>Retention:</span>
+              <select id="manage-setting-event-retention" class="manage-settings-select">
+                <option value="0">Keep forever</option>
+                <option value="1">1 Day</option>
+                <option value="3">3 Days</option>
+                <option value="7">7 Days</option>
+                <option value="30">30 Days</option>
+              </select>
+            </div>
+            <div style="margin-top: 6px;">
+              <button id="manage-setting-event-clear" class="btn btn-xs btn-danger" style="width: 100%;">Clear Database Now</button>
+            </div>
+          </div>
+          <div class="manage-settings-section">
+            <div class="manage-settings-section-title">Audit Database</div>
+            <label class="manage-settings-item" title="Enable audit logging to Azure SQL. Required for Edit/Delete permissions.">
+              <input type="checkbox" id="manage-setting-audit" /> Enable Audit (unlock write)
+            </label>
+            <div id="manage-audit-status" class="manage-audit-status" style="display:none"></div>
           </div>
           <div class="manage-settings-section">
             <div class="manage-settings-section-title">Workloads <input type="checkbox" data-settings-group="workloads" /></div>
@@ -560,6 +615,9 @@
           <span id="manage-bulk-count" class="manage-bulk-count"></span>
           <div class="manage-bulk-actions">
             <button class="btn btn-xs btn-ghost" data-bulk-action="restart" style="display:none">Restart selected</button>
+            <button class="btn btn-xs btn-ghost" data-bulk-action="scale" style="display:none">Scale selected</button>
+            <button class="btn btn-xs btn-ghost" data-bulk-action="cordon" style="display:none">Cordon selected</button>
+            <button class="btn btn-xs btn-ghost" data-bulk-action="uncordon" style="display:none">Uncordon selected</button>
             <button class="btn btn-xs btn-danger" data-bulk-action="delete">Delete selected</button>
           </div>
         </div>
@@ -600,6 +658,7 @@
           <button class="manage-tab" data-tab="exec">Exec</button>
           <button class="manage-tab" data-tab="portforward">Port-forward</button>
           <button class="manage-tab" data-tab="metrics">Metrics</button>
+          <button class="manage-tab" data-tab="history">History</button>
         </nav>
         <div id="manage-detail-pane" class="manage-detail-pane"></div>
         <div id="manage-yaml-pane" class="manage-yaml-pane" style="display:none">
@@ -608,8 +667,14 @@
               <input type="checkbox" id="manage-yaml-reveal" /> Reveal secret values
             </label>
             <button id="manage-yaml-copy" class="btn btn-xs btn-ghost">Copy</button>
+            <button id="manage-yaml-edit" class="btn btn-xs btn-ghost">Edit</button>
+            <button id="manage-yaml-save" class="btn btn-xs btn-primary" style="display:none">Save &amp; Apply</button>
+            <button id="manage-yaml-cancel" class="btn btn-xs btn-ghost" style="display:none">Cancel</button>
+            <button id="manage-yaml-reload" class="btn btn-xs btn-ghost" style="display:none">Reload</button>
           </div>
+          <div id="manage-yaml-error" class="manage-yaml-error" style="display:none"></div>
           <pre id="manage-yaml-output" class="manage-yaml-output"></pre>
+          <textarea id="manage-yaml-textarea" class="manage-yaml-output manage-yaml-textarea" style="display:none" spellcheck="false"></textarea>
         </div>
         <div id="manage-events-pane" class="manage-events-pane" style="display:none">
           <div class="sdr-table-wrap">
@@ -654,6 +719,15 @@
           <div id="manage-pf-list" class="manage-pf-list"></div>
         </div>
         <div id="manage-metrics-pane" class="manage-metrics-pane" style="display:none"></div>
+        <div id="manage-history-pane" class="manage-history-pane" style="display:none">
+          <div id="manage-history-list" class="manage-history-list"></div>
+          <div id="manage-history-diff" class="manage-history-diff" style="display:none">
+            <div class="manage-history-diff-toolbar">
+              <button id="manage-history-diff-close" class="btn btn-xs btn-ghost">← Back to list</button>
+            </div>
+            <pre id="manage-history-diff-output" class="manage-history-diff-output"></pre>
+          </div>
+        </div>
       </aside>
     </div>
 
@@ -666,6 +740,21 @@
         <div class="manage-confirm-actions">
           <button id="manage-confirm-cancel" class="btn btn-ghost btn-sm">Cancel</button>
           <button id="manage-confirm-ok" class="btn btn-sm">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- K8s Manage: audit credential overlay -->
+    <div class="manage-confirm-overlay" id="manage-audit-overlay" style="display:none">
+      <div class="manage-confirm-card">
+        <div class="manage-confirm-title">Connect to Audit Database</div>
+        <p class="manage-confirm-body">Enter SQL credentials to unlock Edit/Delete actions.</p>
+        <input type="text" id="manage-audit-username" class="manage-confirm-input" placeholder="SQL Username" autocomplete="off" />
+        <input type="password" id="manage-audit-password" class="manage-confirm-input" placeholder="SQL Password" autocomplete="off" />
+        <div id="manage-audit-error" class="manage-audit-error" style="display:none"></div>
+        <div class="manage-confirm-actions">
+          <button id="manage-audit-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+          <button id="manage-audit-connect" class="btn btn-primary btn-sm">Connect</button>
         </div>
       </div>
     </div>
@@ -695,6 +784,18 @@
       <span id="update-banner-text">A new version is available</span>
       <button id="btn-install-update" class="btn btn-primary btn-sm">Update</button>
       <button id="btn-dismiss-update" class="btn btn-ghost btn-sm">Later</button>
+    </div>
+
+    <!-- Auth-check failure banner (the check itself errored, distinct from an explicit "not authenticated" result) -->
+    <div id="auth-check-banner" class="update-banner" style="display:none">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2="12" y2="12" />
+        <line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+      <span id="auth-check-banner-text">Couldn't verify authentication status</span>
+      <button id="btn-dismiss-auth-check" class="btn btn-ghost btn-sm">Dismiss</button>
     </div>
 
     <!-- Loading overlay -->

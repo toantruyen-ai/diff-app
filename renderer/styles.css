@@ -103,6 +103,28 @@ body {
   transition: border-color 0.3s, color 0.3s, background 0.3s;
 }
 
+.btn-token-reauth {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+  transition: opacity 0.2s, transform 0.2s;
+  -webkit-app-region: no-drag;
+}
+.btn-token-reauth:hover {
+  opacity: 1;
+  transform: scale(1.15);
+}
+.btn-token-reauth:active {
+  transform: scale(0.95);
+}
+
 .token-expiry-label {
   font-size: 10px;
   text-transform: uppercase;
@@ -1179,6 +1201,13 @@ tr.row-same td.col-b .cell-value { color: var(--same-text); }
   font-size: 12px;
 }
 
+/* Virtual scroll spacer rows — invisible height placeholders */
+.manage-vs-spacer td {
+  padding: 0 !important;
+  border: none !important;
+  line-height: 0;
+}
+
 .sdr-cell-name {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -1490,6 +1519,29 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   accent-color: var(--accent);
 }
 
+.manage-settings-sub-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0 3px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.manage-settings-select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+  cursor: pointer;
+  outline: none;
+  flex: 1;
+}
+.manage-settings-select:focus {
+  border-color: var(--accent);
+}
+
 .manage-refresh-status {
   font-size: 11px;
   color: var(--text-muted);
@@ -1619,6 +1671,22 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
 .manage-yaml-output::-webkit-scrollbar { width: 6px; height: 6px; }
 .manage-yaml-output::-webkit-scrollbar-track { background: transparent; }
 .manage-yaml-output::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.manage-yaml-textarea {
+  resize: none;
+  border: none;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.manage-yaml-error {
+  color: var(--red, #e5484d);
+  font-size: 12px;
+  padding: 8px 14px;
+  white-space: pre-wrap;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
 
 .manage-events-pane {
   flex: 1;
@@ -1788,6 +1856,7 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
 .status-pill.manage-status-running { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); border: 1px solid var(--green); }
 .status-pill.manage-status-pending { background: var(--missing-bg); color: var(--missing-text); border: 1px solid var(--missing-border); }
 .status-pill.manage-status-error   { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); border: 1px solid var(--red); }
+.status-pill.manage-status-local   { background: var(--bg-hover); color: var(--text-dim); border: 1px solid var(--border); }
 
 /* ── K8s Manage: sidebar section dividers + CRD browser (Phase 9) ─────────── */
 .manage-nav-divider {
@@ -2013,6 +2082,9 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
 .manage-select-col { width: 28px; text-align: center; }
 .manage-select-col input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); }
 
+.manage-sortable-th { cursor: pointer; user-select: none; }
+.manage-sortable-th:hover { color: var(--text); }
+
 /* ── K8s Manage: cluster overview (Phase 10.3) ─────────────────────────────── */
 .manage-overview-pane {
   flex: 1;
@@ -2092,7 +2164,9 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
 
 .manifest-diff-toolbar {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
   padding: 8px 0;
   flex-shrink: 0;
 }
@@ -2104,6 +2178,22 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   font-size: 12px;
   color: var(--text-dim);
   cursor: pointer;
+}
+
+.manifest-diff-kind-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.manifest-diff-kind-label select {
+  font-size: 12px;
+  padding: 2px 6px;
+  background: var(--bg-elevated, var(--bg-base));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }
 
 .manifest-diff-output {
@@ -2125,3 +2215,96 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
 .manifest-diff-line-same    { color: var(--text-dim); }
 
 .manifest-diff-single { padding: 10px; margin: 0; white-space: pre-wrap; }
+
+/* ── K8s Manage: Audit write badge ────────────────────────────────────────── */
+.manage-write-badge {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--yellow) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--yellow) 30%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  white-space: nowrap;
+  user-select: none;
+}
+.manage-write-badge.connected {
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+  border-color: color-mix(in srgb, var(--green) 30%, transparent);
+  color: var(--green);
+}
+
+/* ── K8s Manage: Audit status in settings ─────────────────────────────────── */
+.manage-audit-status {
+  font-size: 10px;
+  padding: 3px 8px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.manage-audit-status.connected { color: var(--green); }
+.manage-audit-status.error { color: var(--red); }
+
+/* ── K8s Manage: Audit credential overlay error ───────────────────────────── */
+.manage-audit-error {
+  font-size: 11px;
+  color: var(--red);
+  padding: 4px 0;
+  text-align: center;
+  word-break: break-word;
+}
+
+/* ── K8s Manage: History tab ──────────────────────────────────────────────── */
+.manage-history-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+.manage-history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.manage-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.manage-history-row:hover { background: var(--bg-surface-hover); }
+.manage-history-version { font-weight: 600; color: var(--accent); min-width: 28px; }
+.manage-history-action {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+}
+.manage-history-action.edit { background: color-mix(in srgb, var(--blue) 15%, transparent); color: var(--blue); }
+.manage-history-action.delete { background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--red); }
+.manage-history-action.restore { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+.manage-history-meta { flex: 1; color: var(--text-muted); }
+.manage-history-actions { display: flex; gap: 4px; }
+
+.manage-history-diff {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+.manage-history-diff-toolbar { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.manage-history-diff-output {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--bg-base);
+}

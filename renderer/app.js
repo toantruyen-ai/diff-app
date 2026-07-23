@@ -11,7 +11,9 @@ const state = {
   rightDeps: new Set(),   // deployment names in B (for ✓/✗ badge)
   diffTab: 'env',         // 'env' | 'manifest' — which pane is active in the k8s-diff view
   compareTarget: null,    // { left:{kubeconfig,context,namespace,deployment}, right:{...}|null } — the identity actually being compared (select-mode or list-mode)
-  manifest: { leftYaml: null, rightYaml: null, hideStatus: true, key: null }, // Full Manifest tab cache — derived per-comparison, not connection identity
+  manifest: { leftYaml: null, rightYaml: null, hideStatus: true, key: null, kind: 'deployments', leftName: null, rightName: null }, // Full Manifest tab cache — derived per-comparison, not connection identity
+  storageDiffResults: null,     // last Storage diff `results` array, kept for CSV/JSON export
+  serviceBusDiffResults: null,  // last ServiceBus diff `results` array, kept for CSV/JSON export
   manage: {
     kubeconfig: null,     // file path, AKS kubeconfigId, or null (default kubeconfig)
     context: null,
@@ -20,6 +22,7 @@ const state = {
     rows: [],
     selected: null,       // row shown in the drawer
     pollTimer: null,
+    watchSession: null,   // { sid, kind, namespace, disposers: [] } — active real-time watch, if any
     logSession: null,     // { sid, disposers: [] }
     execSession: null,    // { sid, term, fitAddon, resizeObserver, dataDisposable, disposers }
     metricsSeries: new Map(),  // "namespace/name" -> ring buffer [{t,cpu(millicores),mem(bytes)}], point-in-time samples
@@ -27,12 +30,16 @@ const state = {
     metricsAvailable: true,    // false once metrics-server proves unreachable — stops polling until kind/ns/context changes
     portForwards: new Map(),  // sid -> { sid, pod, targetPort, localPort, disposer } — persist across tabs/rows until stopped or view left
     revealSecrets: false,      // Secret YAML reveal toggle — reset on every drawer open/close, never carries across rows
+    yamlEditing: false,        // YAML tab is in edit (textarea) mode vs. read-only view
+    yamlEditable: true,        // from the last fetch's `editable` flag (false = redacted Secret)
     selection: new Set(),     // bulk-select: keys of `${namespace}::${name}` for the currently checked rows
     mode: 'kind',              // 'kind' (built-in MANAGE_KINDS) | 'crd' (dynamic custom resources)
     crds: [],                  // [{name, group, version, plural, kind, namespaced}] — populated per-context
     activeCrd: null,           // the CRD currently being browsed, when mode === 'crd'
     enableMetrics: false,      // toggle CPU/Memory column display and polling
     enableAutoRefresh: false,  // toggle auto-refresh polling
+    enableEventCapture: false, // toggle auto-capturing events to SQLite
+    eventRetention: 0,         // retention policy in days (0 = forever)
     menuVisibility: {
       // Workloads — default ON for essentials
       pods: true, deployments: true, statefulsets: false, daemonsets: false,
@@ -49,6 +56,13 @@ const state = {
       _crd: false,
     },
     overviewPollTimer: null,
+    // Audit
+    auditEnabled: false,
+    auditConnected: false,
+    auditServer: null,
+    auditDatabase: null,
+    writeUnlocked: false,
+    history: null,
   },
 };
 
@@ -71,6 +85,7 @@ const el = {
     aksDisplay:      $('left-aks-display'),
     kubeconfigField: $('left-kubeconfig-field'),
     contextField:    $('left-context-field'),
+    btnUseFile:      $('left-btn-use-file'),
   },
   right: {
     kubeconfig: $('right-kubeconfig'), btnBrowse: $('right-btn-browse'),
@@ -87,6 +102,9 @@ const el = {
   updateBanner:        $('update-banner'),
   updateBannerText:    $('update-banner-text'),
   btnInstallUpdate:    $('btn-install-update'),
+  authCheckBanner:     $('auth-check-banner'),
+  authCheckBannerText: $('auth-check-banner-text'),
+  btnDismissAuthCheck: $('btn-dismiss-auth-check'),
   btnDismissUpdate:    $('btn-dismiss-update'),
   btnCompare:          $('btn-compare'),
   btnClear:            $('btn-clear'),
@@ -110,6 +128,8 @@ const el = {
   sdrStats:                  $('sdr-stats'),
   sdrSearch:                 $('sdr-search'),
   sdrFilterBtns:             document.querySelectorAll('[data-sdr-filter]'),
+  sdrExportCsv:              $('sdr-export-csv'),
+  sdrExportJson:             $('sdr-export-json'),
   cardServiceBusDiff:        $('card-servicebus-diff'),
   servicebusSelectView:      $('servicebus-select-view'),
   servicebusNamespaceList:   $('servicebus-namespace-list'),
@@ -121,12 +141,15 @@ const el = {
   sbdrStats:                 $('sbdr-stats'),
   sbdrSearch:                $('sbdr-search'),
   sbdrFilterBtns:            document.querySelectorAll('[data-sbdr-filter]'),
+  sbdrExportCsv:             $('sbdr-export-csv'),
+  sbdrExportJson:            $('sbdr-export-json'),
   tokenExpiry:         $('token-expiry'),
   tokenCountdown:      $('token-countdown'),
   authOverlay:         $('auth-overlay'),
   authMessage:      $('auth-message'),
   authStatus:       $('auth-status'),
   btnAzLogin:       $('btn-az-login'),
+  btnTokenReauth:   $('btn-token-reauth'),
   filterBar:        $('filter-bar'),
   searchInput:    $('search-input'),
   filterBtns:     document.querySelectorAll('.toggle-btn[data-filter]'),
@@ -139,6 +162,8 @@ const el = {
   thLeftLabel:    $('th-left-label'),
   thRightLabel:   $('th-right-label'),
   toggleMask:     $('toggle-mask'),
+  envDiffExportCsv:  $('env-diff-export-csv'),
+  envDiffExportJson: $('env-diff-export-json'),
 
   cardK8sManage:        $('card-k8s-manage'),
   manageSelectView:     $('manage-select-view'),
@@ -159,6 +184,9 @@ const el = {
   manageSettingsPopover: $('manage-settings-popover'),
   manageSettingMetrics: $('manage-setting-metrics'),
   manageSettingAutoRefresh: $('manage-setting-autorefresh'),
+  manageSettingEventCapture: $('manage-setting-event-capture'),
+  manageSettingEventRetention: $('manage-setting-event-retention'),
+  manageSettingEventClear: $('manage-setting-event-clear'),
   manageTableWrap:      $('manage-table-wrap'),
   manageThead:          $('manage-thead'),
   manageTbody:          $('manage-tbody'),
@@ -173,6 +201,12 @@ const el = {
   manageYamlCopy:       $('manage-yaml-copy'),
   manageYamlRevealLabel: $('manage-yaml-reveal-label'),
   manageYamlReveal:     $('manage-yaml-reveal'),
+  manageYamlTextarea:   $('manage-yaml-textarea'),
+  manageYamlError:      $('manage-yaml-error'),
+  manageYamlEdit:       $('manage-yaml-edit'),
+  manageYamlSave:       $('manage-yaml-save'),
+  manageYamlCancel:     $('manage-yaml-cancel'),
+  manageYamlReload:     $('manage-yaml-reload'),
   manageEventsPane:     $('manage-events-pane'),
   manageEventsThead:    $('manage-events-thead'),
   manageEventsTbody:    $('manage-events-tbody'),
@@ -214,11 +248,50 @@ const el = {
   manageCrdFilter:      $('manage-crd-filter'),
   manageCrdList:        $('manage-crd-list'),
 
+  // Audit
+  manageWriteBadge:     $('manage-write-badge'),
+  manageSettingAudit:   $('manage-setting-audit'),
+  manageAuditStatus:    $('manage-audit-status'),
+  manageAuditOverlay:   $('manage-audit-overlay'),
+  manageAuditUsername:  $('manage-audit-username'),
+  manageAuditPassword:  $('manage-audit-password'),
+  manageAuditError:     $('manage-audit-error'),
+  manageAuditCancel:    $('manage-audit-cancel'),
+  manageAuditConnect:   $('manage-audit-connect'),
+  manageHistoryPane:    $('manage-history-pane'),
+  manageHistoryList:    $('manage-history-list'),
+  manageHistoryDiff:    $('manage-history-diff'),
+  manageHistoryDiffClose: $('manage-history-diff-close'),
+  manageHistoryDiffOutput: $('manage-history-diff-output'),
+
   diffViewTabs:         $('diff-view-tabs'),
   envDiffPane:          $('env-diff-pane'),
   manifestDiffPane:     $('manifest-diff-pane'),
   manifestDiffHideStatus: $('manifest-diff-hide-status'),
   manifestDiffOutput:   $('manifest-diff-output'),
+  manifestDiffKind:       $('manifest-diff-kind'),
+  manifestDiffLeftNameField:  $('manifest-diff-left-name-field'),
+  manifestDiffLeftName:       $('manifest-diff-left-name'),
+  manifestDiffRightNameField: $('manifest-diff-right-name-field'),
+  manifestDiffRightName:      $('manifest-diff-right-name'),
+  manifestDiffExport:         $('manifest-diff-export'),
+};
+
+// Kinds offered for Full Manifest diff — namespaced built-in kinds only. Events excluded (a
+// single event's manifest isn't meaningful to diff); cluster-scoped kinds excluded because the
+// name pickers below are wired to the per-side (context, namespace) already selected for Env Vars.
+const MANIFEST_DIFF_KINDS = ['deployments', 'pods', 'statefulsets', 'daemonsets', 'replicasets',
+  'services', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'pvcs', 'hpas',
+  'serviceaccounts', 'roles', 'rolebindings', 'networkpolicies', 'resourcequotas', 'limitranges'];
+
+// Self-contained (not MANAGE_KIND_LABEL_PLURAL, which is declared later in this file and would be
+// in its temporal dead zone at this point — this runs at top-level script eval, not inside a function).
+const MANIFEST_DIFF_KIND_LABELS = {
+  deployments: 'Deployment', pods: 'Pod', statefulsets: 'StatefulSet', daemonsets: 'DaemonSet',
+  replicasets: 'ReplicaSet', services: 'Service', ingresses: 'Ingress', configmaps: 'ConfigMap',
+  secrets: 'Secret', jobs: 'Job', cronjobs: 'CronJob', pvcs: 'PVC', hpas: 'HPA',
+  serviceaccounts: 'ServiceAccount', roles: 'Role', rolebindings: 'RoleBinding',
+  networkpolicies: 'NetworkPolicy', resourcequotas: 'ResourceQuota', limitranges: 'LimitRange',
 };
 
 /* ── Loading helpers ─────────────────────────────────────────────────────── */
@@ -263,6 +336,24 @@ function setupPanel(side) {
     data.envs = null;
     updateCompareButton();
   });
+
+  if (s.btnUseFile) {
+    s.btnUseFile.addEventListener('click', () => {
+      // Switch this panel back to file mode
+      s.aksField.style.display        = 'none';
+      s.kubeconfigField.style.display = '';
+      s.contextField.style.display    = '';
+      s.selectorGrid.classList.remove('col-3');
+      // Reset state and reload from default kubeconfig
+      data.kubeconfig = null;
+      data.context    = null;
+      data.namespace  = null;
+      data.deployment = null;
+      data.envs       = null;
+      s.kubeconfig.value = '';
+      loadContexts(side);
+    });
+  }
 
   loadContexts(side);
 }
@@ -526,18 +617,98 @@ el.btnClear.addEventListener('click', () => {
   el.filterBar.style.display  = 'none';
   el.diffBody.innerHTML = '';
   state.compareTarget = null;
-  state.manifest = { leftYaml: null, rightYaml: null, hideStatus: el.manifestDiffHideStatus.checked, key: null };
+  state.manifest = { leftYaml: null, rightYaml: null, hideStatus: el.manifestDiffHideStatus.checked, key: null, kind: 'deployments', leftName: null, rightName: null };
+  resetManifestKindPicker();
   switchDiffTab('env');
 });
 
 /* ════════════════════════════════════════════════════════════════════════════
    FULL MANIFEST DIFF TAB (Phase 11) — reuses get-resource-yaml, no new IPC.
+   Phase 15 generalizes it beyond Deployments via a kind picker + two name pickers.
    ════════════════════════════════════════════════════════════════════════════ */
+MANIFEST_DIFF_KINDS.forEach((k) => {
+  const opt = document.createElement('option');
+  opt.value = k;
+  opt.textContent = MANIFEST_DIFF_KIND_LABELS[k] || k;
+  el.manifestDiffKind.appendChild(opt);
+});
+
+function resetManifestKindPicker() {
+  el.manifestDiffKind.value = 'deployments';
+  el.manifestDiffLeftNameField.style.display = 'none';
+  el.manifestDiffRightNameField.style.display = 'none';
+  el.manifestDiffLeftName.innerHTML = '';
+  el.manifestDiffRightName.innerHTML = '';
+}
+
+async function populateManifestNamePickers() {
+  const target = state.compareTarget;
+  const kind = state.manifest.kind;
+  if (!target) return;
+  const { left, right } = target;
+
+  const [leftResult, rightResult] = await Promise.all([
+    window.k8sApi.listResource(left.kubeconfig, left.context, left.namespace, kind),
+    right ? window.k8sApi.listResource(right.kubeconfig, right.context, right.namespace, kind) : Promise.resolve({ ok: true, rows: [] }),
+  ]);
+  if (state.manifest.kind !== kind) return; // kind changed again while this was in flight
+
+  const fill = (selectEl, result, currentName) => {
+    selectEl.innerHTML = '';
+    const names = result.ok ? result.rows.map((r) => r.name) : [];
+    names.forEach((n) => {
+      const opt = document.createElement('option');
+      opt.value = n;
+      opt.textContent = n;
+      selectEl.appendChild(opt);
+    });
+    if (currentName && names.includes(currentName)) selectEl.value = currentName;
+    return selectEl.value || null;
+  };
+
+  state.manifest.leftName = fill(el.manifestDiffLeftName, leftResult, left.deployment);
+  state.manifest.rightName = right ? fill(el.manifestDiffRightName, rightResult, right.deployment) : null;
+  el.manifestDiffLeftNameField.style.display = '';
+  el.manifestDiffRightNameField.style.display = right ? '' : 'none';
+}
+
+el.manifestDiffKind.addEventListener('change', async () => {
+  const kind = el.manifestDiffKind.value;
+  state.manifest.kind = kind;
+  state.manifest.leftName = null;
+  state.manifest.rightName = null;
+  state.manifest.key = null;
+  if (kind === 'deployments') {
+    el.manifestDiffLeftNameField.style.display = 'none';
+    el.manifestDiffRightNameField.style.display = 'none';
+    loadManifestDiff();
+    return;
+  }
+  el.manifestDiffOutput.innerHTML = '<div class="manage-empty">Loading names…</div>';
+  await populateManifestNamePickers();
+  loadManifestDiff();
+});
+
+el.manifestDiffLeftName.addEventListener('change', () => {
+  state.manifest.leftName = el.manifestDiffLeftName.value || null;
+  state.manifest.key = null;
+  loadManifestDiff();
+});
+el.manifestDiffRightName.addEventListener('change', () => {
+  state.manifest.rightName = el.manifestDiffRightName.value || null;
+  state.manifest.key = null;
+  loadManifestDiff();
+});
+
 function setCompareTarget(left, right) {
   state.compareTarget = { left, right };
   state.manifest.leftYaml = null;
   state.manifest.rightYaml = null;
   state.manifest.key = null;
+  state.manifest.kind = 'deployments';
+  state.manifest.leftName = null;
+  state.manifest.rightName = null;
+  resetManifestKindPicker();
   if (state.diffTab === 'manifest') loadManifestDiff();
 }
 
@@ -558,8 +729,11 @@ function switchDiffTab(tab) {
 function compareTargetKey(target) {
   if (!target) return null;
   const { left, right } = target;
-  const side = (s) => s ? `${s.kubeconfig || ''}/${s.context}/${s.namespace}/${s.deployment}` : 'none';
-  return `${side(left)}::${side(right)}`;
+  const kind = state.manifest.kind;
+  const leftName = kind === 'deployments' ? left?.deployment : state.manifest.leftName;
+  const rightName = kind === 'deployments' ? right?.deployment : state.manifest.rightName;
+  const side = (s, name) => s ? `${s.kubeconfig || ''}/${s.context}/${s.namespace}/${kind}/${name}` : 'none';
+  return `${side(left, leftName)}::${side(right, rightName)}`;
 }
 
 async function loadManifestDiff() {
@@ -568,23 +742,30 @@ async function loadManifestDiff() {
     el.manifestDiffOutput.innerHTML = '<div class="manage-empty">Select deployments and click Compare first.</div>';
     return;
   }
+  const kind = state.manifest.kind;
+  const { left, right } = target;
+  const leftName = kind === 'deployments' ? left.deployment : state.manifest.leftName;
+  const rightName = kind === 'deployments' ? (right && right.deployment) : state.manifest.rightName;
+  if (kind !== 'deployments' && !leftName) {
+    el.manifestDiffOutput.innerHTML = '<div class="manage-empty">Select a name for side A.</div>';
+    return;
+  }
   const key = compareTargetKey(target);
   if (state.manifest.key === key && state.manifest.leftYaml != null) {
     renderManifestDiff();
     return;
   }
   el.manifestDiffOutput.innerHTML = '<div class="manage-empty">Loading manifests…</div>';
-  const { left, right } = target;
-  const leftResult = await window.k8sApi.getResourceYaml(left.kubeconfig, left.context, left.namespace, 'deployments', left.deployment);
+  const leftResult = await window.k8sApi.getResourceYaml(left.kubeconfig, left.context, left.namespace, kind, leftName);
   if (compareTargetKey(state.compareTarget) !== key) return; // comparison changed while in flight
   let rightResult = null;
-  if (right) {
-    rightResult = await window.k8sApi.getResourceYaml(right.kubeconfig, right.context, right.namespace, 'deployments', right.deployment);
+  if (right && rightName) {
+    rightResult = await window.k8sApi.getResourceYaml(right.kubeconfig, right.context, right.namespace, kind, rightName);
     if (compareTargetKey(state.compareTarget) !== key) return;
   }
   state.manifest.key = key;
   state.manifest.leftYaml = leftResult.ok ? leftResult.yaml : `Error: ${leftResult.error}`;
-  state.manifest.rightYaml = right ? (rightResult.ok ? rightResult.yaml : `Error: ${rightResult.error}`) : null;
+  state.manifest.rightYaml = (right && rightName) ? (rightResult.ok ? rightResult.yaml : `Error: ${rightResult.error}`) : null;
   renderManifestDiff();
 }
 
@@ -614,6 +795,23 @@ el.manifestDiffHideStatus.addEventListener('change', () => {
   if (state.manifest.leftYaml != null) renderManifestDiff();
 });
 
+el.manifestDiffExport.addEventListener('click', () => {
+  if (state.manifest.leftYaml == null) return;
+  if (state.manifest.rightYaml == null) {
+    downloadTextFile('manifest-diff.diff', state.manifest.leftYaml, 'text/plain');
+    return;
+  }
+  const hideStatus = el.manifestDiffHideStatus.checked;
+  const left = hideStatus ? stripManifestStatus(state.manifest.leftYaml) : state.manifest.leftYaml;
+  const right = hideStatus ? stripManifestStatus(state.manifest.rightYaml) : state.manifest.rightYaml;
+  const chunks = Diff.diffLines(left, right);
+  const text = chunks.map((part) => {
+    const prefix = part.added ? '+' : part.removed ? '-' : ' ';
+    return part.value.replace(/\n$/, '').split('\n').map((line) => `${prefix}${line}`).join('\n');
+  }).join('\n');
+  downloadTextFile('manifest-diff.diff', text, 'text/plain');
+});
+
 /* ════════════════════════════════════════════════════════════════════════════
    FILTER BAR
    ════════════════════════════════════════════════════════════════════════════ */
@@ -641,15 +839,15 @@ el.toggleMask.addEventListener('change', () => {
    ════════════════════════════════════════════════════════════════════════════ */
 let lastEnvs = null;
 
-function renderTable(leftEnvs, rightEnvs) {
-  lastEnvs = { left: leftEnvs, right: rightEnvs };
-
+// Pure diff computation, shared by the on-screen table and CSV/JSON export — both must
+// reflect the same filter/search/mask state so export never becomes an accidental bypass.
+function computeEnvDiffRows(leftEnvs, rightEnvs) {
   const allKeys = Array.from(
     new Set([...Object.keys(leftEnvs), ...Object.keys(rightEnvs)])
   ).sort();
 
-  el.diffBody.innerHTML = '';
-  let totalDiff = 0, totalSame = 0, totalMissing = 0, shown = 0;
+  const rows = [];
+  let totalDiff = 0, totalSame = 0, totalMissing = 0;
 
   for (const key of allKeys) {
     const lEntry = leftEnvs[key];
@@ -668,37 +866,65 @@ function renderTable(leftEnvs, rightEnvs) {
     if (state.filter !== 'all' && state.filter !== rowType) continue;
     if (state.search && !key.toLowerCase().includes(state.search)) continue;
 
-    shown++;
-    const source      = lEntry?.source || rEntry?.source || 'Unknown';
-    const sourceClass = getSourceClass(source);
-    const sourceLabel = formatSourceLabel(source);
-    const maskedL     = maskValue(lVal, source);
-    const maskedR     = maskValue(rVal, source);
+    const source = lEntry?.source || rEntry?.source || 'Unknown';
+    rows.push({
+      key, rowType, source, sourceLabel: formatSourceLabel(source),
+      leftPresent: !!lEntry, rightPresent: !!rEntry,
+      leftValue: lEntry ? maskValue(lVal, source) : null,
+      rightValue: rEntry ? maskValue(rVal, source) : null,
+    });
+  }
 
+  return { rows, totalDiff, totalSame, totalMissing };
+}
+
+function renderTable(leftEnvs, rightEnvs) {
+  lastEnvs = { left: leftEnvs, right: rightEnvs };
+  const { rows, totalDiff, totalSame, totalMissing } = computeEnvDiffRows(leftEnvs, rightEnvs);
+
+  el.diffBody.innerHTML = '';
+  for (const row of rows) {
+    const sourceClass = getSourceClass(row.source);
     const tr = document.createElement('tr');
-    tr.className = `row-${rowType}`;
+    tr.className = `row-${row.rowType}`;
     tr.innerHTML = `
-      <td class="col-key"><span class="cell-key">${escHtml(key)}</span></td>
-      <td class="col-source"><span class="source-tag ${sourceClass}">${escHtml(sourceLabel)}</span></td>
+      <td class="col-key"><span class="cell-key">${escHtml(row.key)}</span></td>
+      <td class="col-source"><span class="source-tag ${sourceClass}">${escHtml(row.sourceLabel)}</span></td>
       <td class="col-a col-value">
-        ${lEntry ? `<span class="cell-value">${escHtml(maskedL)}</span>` : `<span class="cell-value-missing">— not present —</span>`}
+        ${row.leftPresent ? `<span class="cell-value">${escHtml(row.leftValue)}</span>` : `<span class="cell-value-missing">— not present —</span>`}
       </td>
       <td class="col-b col-value">
-        ${rEntry ? `<span class="cell-value">${escHtml(maskedR)}</span>` : `<span class="cell-value-missing">— not present —</span>`}
+        ${row.rightPresent ? `<span class="cell-value">${escHtml(row.rightValue)}</span>` : `<span class="cell-value-missing">— not present —</span>`}
       </td>
       <td class="col-status">
-        <span class="status-pill pill-${rowType}">
-          ${rowType === 'diff' ? 'DIFF' : rowType === 'same' ? 'SAME' : 'MISSING'}
+        <span class="status-pill pill-${row.rowType}">
+          ${row.rowType === 'diff' ? 'DIFF' : row.rowType === 'same' ? 'SAME' : 'MISSING'}
         </span>
       </td>
     `;
     el.diffBody.appendChild(tr);
   }
 
-  el.statsEl.textContent = `${shown} shown · ${totalDiff} diff · ${totalSame} same · ${totalMissing} missing`;
+  el.statsEl.textContent = `${rows.length} shown · ${totalDiff} diff · ${totalSame} same · ${totalMissing} missing`;
   el.emptyState.style.display = 'none';
   el.diffTable.style.display  = 'table';
 }
+
+el.envDiffExportCsv.addEventListener('click', () => {
+  if (!lastEnvs) return;
+  const { rows } = computeEnvDiffRows(lastEnvs.left, lastEnvs.right);
+  const csv = rowsToCsv(
+    ['Key', 'Source', 'A', 'B', 'Status'],
+    rows.map((r) => [r.key, r.sourceLabel, r.leftPresent ? r.leftValue : '', r.rightPresent ? r.rightValue : '', r.rowType])
+  );
+  downloadTextFile('env-diff.csv', csv, 'text/csv');
+});
+
+el.envDiffExportJson.addEventListener('click', () => {
+  if (!lastEnvs) return;
+  const { rows } = computeEnvDiffRows(lastEnvs.left, lastEnvs.right);
+  downloadTextFile('env-diff.json', JSON.stringify(rows, null, 2), 'application/json');
+});
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 function maskValue(val, source) {
@@ -749,6 +975,28 @@ function escHtml(str) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/* ── Export helpers (shared by Env Vars / Full Manifest / Storage / ServiceBus diffs) ────── */
+function downloadTextFile(filename, content, mime) {
+  const blob = new Blob([content], { type: mime || 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function csvEscape(val) {
+  const s = val == null ? '' : String(val);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function rowsToCsv(headers, rows) {
+  const lines = [headers.map(csvEscape).join(',')];
+  for (const row of rows) lines.push(row.map(csvEscape).join(','));
+  return lines.join('\n');
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    VIEW SWITCHING
    ════════════════════════════════════════════════════════════════════════════ */
@@ -770,6 +1018,7 @@ function showView(view) {
   // poller and any open log/exec/port-forward stream, so nothing keeps running in the background.
   if (view !== 'manage') {
     stopManagePolling();
+    stopManageWatch();
     stopManageMetricsPolling();
     stopManageOverviewPolling();
     stopManageLogs();
@@ -809,6 +1058,7 @@ el.cardK8sManage.addEventListener('click', () => {
 
 window.addEventListener('beforeunload', () => {
   stopManagePolling();
+  stopManageWatch();
   stopManageMetricsPolling();
   stopManageLogs();
   stopManageExec();
@@ -979,23 +1229,6 @@ function setAksMode(side, clusterName, environment) {
   s.aksDisplay.innerHTML = `${envHtml}<span class="aks-name-text">${escHtml(clusterName)}</span>`;
 }
 
-el.right.btnUseFile.addEventListener('click', () => {
-  const s = el.right;
-  // Switch right panel back to file mode
-  s.aksField.style.display        = 'none';
-  s.kubeconfigField.style.display = '';
-  s.contextField.style.display    = '';
-  s.selectorGrid.classList.remove('col-3');
-  // Reset state and reload from default kubeconfig
-  state.right.kubeconfig   = null;
-  state.right.context      = null;
-  state.right.namespace    = null;
-  state.right.deployment   = null;
-  state.right.envs         = null;
-  s.kubeconfig.value       = '';
-  loadContexts('right');
-});
-
 function initPanelsOnce() {
   if (panelsInitialized) return;
   panelsInitialized = true;
@@ -1116,7 +1349,19 @@ el.btnCompareStorage.addEventListener('click', async () => {
 // ── Storage diff table ────────────────────────────────────────────────────────
 let sdrFilter = 'all';
 let sdrSearch = '';
-let lastSdrRows = [];
+// Shared by Storage and ServiceBus diff: union of item names across all accounts/namespaces,
+// each with a per-account/namespace presence boolean. Used by both the on-screen table render
+// and CSV/JSON export, so the two can never drift apart.
+function buildPresenceMatrix(results, itemsKey) {
+  const allItems = new Set();
+  for (const r of results) {
+    for (const item of r[itemsKey]) allItems.add(item);
+  }
+  return Array.from(allItems).sort().map((item) => ({
+    item,
+    presence: results.map((r) => r[itemsKey].includes(item)),
+  }));
+}
 
 el.sdrFilterBtns.forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -1141,12 +1386,9 @@ function applySdrFilter() {
 }
 
 function renderStorageDiffTable(results) {
-  // Build unique container set
-  const allContainers = new Set();
-  for (const r of results) {
-    for (const c of r.containers) allContainers.add(c);
-  }
-  const sorted = Array.from(allContainers).sort();
+  state.storageDiffResults = results;
+  const matrix = buildPresenceMatrix(results, 'containers');
+  const sorted = matrix.map((m) => m.item);
 
   // ── Header ────────────────────────────────────────────────────────────────
   el.sdrHead.innerHTML = '';
@@ -1174,8 +1416,7 @@ function renderStorageDiffTable(results) {
   el.sdrBody.innerHTML = '';
   let totalComplete = 0, totalPartial = 0;
 
-  for (const container of sorted) {
-    const presence = results.map((r) => r.containers.includes(container));
+  for (const { item: container, presence } of matrix) {
     const allHave = presence.every(Boolean);
     const status = allHave ? 'complete' : 'partial';
     if (allHave) totalComplete++; else totalPartial++;
@@ -1214,6 +1455,31 @@ function renderStorageDiffTable(results) {
   el.sdrSearch.value = '';
   el.sdrFilterBtns.forEach((b) => b.classList.toggle('active', b.dataset.sdrFilter === 'all'));
 }
+
+el.sdrExportCsv.addEventListener('click', () => {
+  const results = state.storageDiffResults;
+  if (!results) return;
+  const matrix = buildPresenceMatrix(results, 'containers');
+  const headers = ['Container', ...results.map((r) => r.name), 'Status'];
+  const rows = matrix.map(({ item, presence }) => [
+    item,
+    ...presence.map((p, i) => (results[i].ok ? (p ? 'yes' : 'no') : 'ERROR')),
+    presence.every(Boolean) ? 'ALL' : 'PARTIAL',
+  ]);
+  downloadTextFile('storage-diff.csv', rowsToCsv(headers, rows), 'text/csv');
+});
+
+el.sdrExportJson.addEventListener('click', () => {
+  const results = state.storageDiffResults;
+  if (!results) return;
+  const matrix = buildPresenceMatrix(results, 'containers');
+  const out = matrix.map(({ item, presence }) => ({
+    container: item,
+    presence: Object.fromEntries(results.map((r, i) => [r.name, r.ok ? presence[i] : null])),
+    status: presence.every(Boolean) ? 'ALL' : 'PARTIAL',
+  }));
+  downloadTextFile('storage-diff.json', JSON.stringify(out, null, 2), 'application/json');
+});
 
 /* ════════════════════════════════════════════════════════════════════════════
    SERVICEBUS DIFF
@@ -1334,12 +1600,9 @@ function applySbdrFilter() {
 }
 
 function renderServiceBusDiffTable(results) {
-  // Build unique queue set
-  const allQueues = new Set();
-  for (const r of results) {
-    for (const q of r.queues) allQueues.add(q);
-  }
-  const sorted = Array.from(allQueues).sort();
+  state.serviceBusDiffResults = results;
+  const matrix = buildPresenceMatrix(results, 'queues');
+  const sorted = matrix.map((m) => m.item);
 
   // ── Header ────────────────────────────────────────────────────────────────
   el.sbdrHead.innerHTML = '';
@@ -1367,8 +1630,7 @@ function renderServiceBusDiffTable(results) {
   el.sbdrBody.innerHTML = '';
   let totalComplete = 0, totalPartial = 0;
 
-  for (const queue of sorted) {
-    const presence = results.map((r) => r.queues.includes(queue));
+  for (const { item: queue, presence } of matrix) {
     const allHave = presence.every(Boolean);
     const status = allHave ? 'complete' : 'partial';
     if (allHave) totalComplete++; else totalPartial++;
@@ -1407,6 +1669,31 @@ function renderServiceBusDiffTable(results) {
   el.sbdrSearch.value = '';
   el.sbdrFilterBtns.forEach((b) => b.classList.toggle('active', b.dataset.sbdrFilter === 'all'));
 }
+
+el.sbdrExportCsv.addEventListener('click', () => {
+  const results = state.serviceBusDiffResults;
+  if (!results) return;
+  const matrix = buildPresenceMatrix(results, 'queues');
+  const headers = ['Queue', ...results.map((r) => r.name), 'Status'];
+  const rows = matrix.map(({ item, presence }) => [
+    item,
+    ...presence.map((p, i) => (results[i].ok ? (p ? 'yes' : 'no') : 'ERROR')),
+    presence.every(Boolean) ? 'ALL' : 'PARTIAL',
+  ]);
+  downloadTextFile('servicebus-diff.csv', rowsToCsv(headers, rows), 'text/csv');
+});
+
+el.sbdrExportJson.addEventListener('click', () => {
+  const results = state.serviceBusDiffResults;
+  if (!results) return;
+  const matrix = buildPresenceMatrix(results, 'queues');
+  const out = matrix.map(({ item, presence }) => ({
+    queue: item,
+    presence: Object.fromEntries(results.map((r, i) => [r.name, r.ok ? presence[i] : null])),
+    status: presence.every(Boolean) ? 'ALL' : 'PARTIAL',
+  }));
+  downloadTextFile('servicebus-diff.json', JSON.stringify(out, null, 2), 'application/json');
+});
 
 /* ════════════════════════════════════════════════════════════════════════════
    K8S MANAGE — entry flow (cluster picker → context/namespace)
@@ -1479,6 +1766,7 @@ async function enterManageWorkspace(kubeconfigRef) {
 
   showView('manage');
   el.btnManageContinue.disabled = false;
+  initAuditOnStartup(); // async — doesn't block context loading
   await loadManageContexts();
 }
 
@@ -1520,8 +1808,7 @@ async function loadManageNamespaces() {
       el.manageNamespace.value = defaultNs;
       data.namespace = defaultNs;
       if (data.resourceType !== 'overview') {
-        refreshManageResources();
-        startManagePolling();
+        startManageLiveUpdates(data.resourceType, data.namespace);
         startManageMetricsPolling();
       }
     }
@@ -1539,6 +1826,7 @@ el.manageContext.addEventListener('change', async () => {
   el.manageNamespace.innerHTML = '<option value="">— select namespace —</option>';
   el.manageNamespace.disabled = true;
   stopManagePolling();
+  stopManageWatch();
   stopManageMetricsPolling();
   stopManageOverviewPolling();
   _clearManageRowsCache();
@@ -1557,22 +1845,24 @@ el.manageContext.addEventListener('change', async () => {
     if (data.resourceType === 'overview') startManageOverviewPolling();
     await loadManageNamespaces();
   }
+  syncEventCaptureToBackend();
 });
 
 el.manageNamespace.addEventListener('change', () => {
   const data = state.manage;
   data.namespace = el.manageNamespace.value || null;
   stopManagePolling();
+  stopManageWatch();
   stopManageMetricsPolling();
   _clearManageRowsCache();
   closeManageDrawer();
   if (data.namespace) {
-    refreshManageResources();
-    startManagePolling();
+    startManageLiveUpdates(data.resourceType, data.namespace);
     startManageMetricsPolling();
   } else {
     renderManageTable(data.resourceType, []);
   }
+  syncEventCaptureToBackend();
 });
 
 let _manageSearchTimer;
@@ -1612,6 +1902,9 @@ function loadManageSettings() {
     }
     if (typeof saved.enableMetrics === 'boolean') state.manage.enableMetrics = saved.enableMetrics;
     if (typeof saved.enableAutoRefresh === 'boolean') state.manage.enableAutoRefresh = saved.enableAutoRefresh;
+    if (typeof saved.enableEventCapture === 'boolean') state.manage.enableEventCapture = saved.enableEventCapture;
+    if (typeof saved.eventRetention === 'number') state.manage.eventRetention = saved.eventRetention;
+    if (typeof saved.auditEnabled === 'boolean') state.manage.auditEnabled = saved.auditEnabled;
   } catch { /* corrupted localStorage — use defaults */ }
 }
 
@@ -1621,8 +1914,34 @@ function saveManageSettings() {
       menuVisibility: state.manage.menuVisibility,
       enableMetrics: state.manage.enableMetrics,
       enableAutoRefresh: state.manage.enableAutoRefresh,
+      enableEventCapture: state.manage.enableEventCapture,
+      eventRetention: state.manage.eventRetention,
+      auditEnabled: state.manage.auditEnabled,
     }));
   } catch { /* quota exceeded — silently ignore */ }
+}
+
+// ── Audit credential persistence (plaintext localStorage) ────────────────────
+const MANAGE_AUDIT_CREDS_KEY = 'k8s-manage-audit-creds';
+
+function loadAuditCreds() {
+  try {
+    const raw = localStorage.getItem(MANAGE_AUDIT_CREDS_KEY);
+    if (!raw) return null;
+    const creds = JSON.parse(raw);
+    if (creds.username && creds.password) return creds;
+  } catch { /* ignore */ }
+  return null;
+}
+
+function saveAuditCreds(username, password) {
+  try {
+    localStorage.setItem(MANAGE_AUDIT_CREDS_KEY, JSON.stringify({ username, password }));
+  } catch { /* ignore */ }
+}
+
+function clearAuditCreds() {
+  try { localStorage.removeItem(MANAGE_AUDIT_CREDS_KEY); } catch { /* ignore */ }
 }
 
 // Load settings immediately on startup
@@ -1634,6 +1953,8 @@ function syncSettingsPopoverToState() {
   // Performance checkboxes
   el.manageSettingMetrics.checked = state.manage.enableMetrics;
   el.manageSettingAutoRefresh.checked = state.manage.enableAutoRefresh;
+  el.manageSettingEventCapture.checked = state.manage.enableEventCapture;
+  el.manageSettingEventRetention.value = state.manage.eventRetention;
 
   // Menu item checkboxes
   const vis = state.manage.menuVisibility;
@@ -1815,8 +2136,215 @@ el.manageSettingAutoRefresh.addEventListener('change', () => {
   saveManageSettings();
 });
 
+// Sync event capture settings to backend
+async function syncEventCaptureToBackend() {
+  const data = state.manage;
+  if (!data.context) return;
+  
+  try {
+    await window.k8sApi.toggleEventCapture({
+      enabled: data.enableEventCapture,
+      ref: data.kubeconfig,
+      contextName: data.context,
+      namespace: data.namespace || '',
+      retentionDays: data.eventRetention
+    });
+  } catch (err) {
+    console.error('Failed to sync event capture settings to backend:', err);
+  }
+}
+
+el.manageSettingEventCapture.addEventListener('change', async () => {
+  state.manage.enableEventCapture = el.manageSettingEventCapture.checked;
+  saveManageSettings();
+  await syncEventCaptureToBackend();
+});
+
+el.manageSettingEventRetention.addEventListener('change', async () => {
+  state.manage.eventRetention = Number(el.manageSettingEventRetention.value) || 0;
+  saveManageSettings();
+  if (state.manage.enableEventCapture) {
+    await window.k8sApi.setEventRetention({ retentionDays: state.manage.eventRetention });
+  }
+});
+
+el.manageSettingEventClear.addEventListener('click', async () => {
+  const confirmClear = confirm("Are you sure you want to clear the local events database for the current cluster?");
+  if (confirmClear) {
+    try {
+      const result = await window.k8sApi.clearEventDb();
+      if (result.ok) {
+        alert(`Successfully cleared event database.`);
+        // Reload events if drawer is open on events tab
+        const activeTab = el.manageDrawer.querySelector('.manage-tab.active');
+        if (activeTab && activeTab.dataset.tab === 'events') {
+          loadManageEvents();
+        }
+      } else {
+        alert(`Error clearing database: ${result.error}`);
+      }
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+  }
+});
+
 // Apply visibility on startup
 applyMenuVisibility();
+
+// ── Audit toggle + credential overlay + write-gate ────────────────────────────
+
+function updateWriteGate() {
+  const data = state.manage;
+  data.writeUnlocked = data.auditEnabled && data.auditConnected;
+  // Badge
+  if (data.writeUnlocked) {
+    el.manageWriteBadge.textContent = '🔓 Write enabled';
+    el.manageWriteBadge.className = 'manage-write-badge connected';
+  } else {
+    el.manageWriteBadge.textContent = '🔒 Read-only';
+    el.manageWriteBadge.className = 'manage-write-badge';
+  }
+  // Re-render drawer actions/YAML edit gate if drawer is open
+  if (data.selected) {
+    const kind = data.mode === 'crd' ? (data.activeCrd?.name || '') : data.resourceType;
+    renderManageDrawerActions(kind, data.selected);
+    renderManageYamlEditGate();
+  }
+}
+
+function showAuditStatus(text, type) {
+  el.manageAuditStatus.textContent = text;
+  el.manageAuditStatus.className = `manage-audit-status ${type || ''}`;
+  el.manageAuditStatus.style.display = text ? '' : 'none';
+}
+
+function showAuditOverlay() {
+  return new Promise((resolve) => {
+    el.manageAuditOverlay.style.display = 'flex';
+    el.manageAuditError.style.display = 'none';
+    el.manageAuditUsername.value = '';
+    el.manageAuditPassword.value = '';
+    const creds = loadAuditCreds();
+    if (creds) {
+      el.manageAuditUsername.value = creds.username;
+      el.manageAuditPassword.value = creds.password;
+    }
+    el.manageAuditUsername.focus();
+
+    const cleanup = (result) => {
+      el.manageAuditOverlay.style.display = 'none';
+      el.manageAuditConnect.onclick = null;
+      el.manageAuditCancel.onclick = null;
+      resolve(result);
+    };
+
+    el.manageAuditCancel.onclick = () => cleanup(null);
+    el.manageAuditConnect.onclick = async () => {
+      const user = el.manageAuditUsername.value.trim();
+      const pw = el.manageAuditPassword.value;
+      if (!user || !pw) {
+        el.manageAuditError.textContent = 'Username and password are required';
+        el.manageAuditError.style.display = '';
+        return;
+      }
+      el.manageAuditConnect.disabled = true;
+      el.manageAuditConnect.textContent = 'Connecting…';
+      el.manageAuditError.style.display = 'none';
+      try {
+        const result = await window.k8sApi.connectAuditDb(user, pw);
+        if (result.ok) {
+          saveAuditCreds(user, pw);
+          cleanup(result);
+        } else {
+          el.manageAuditError.textContent = result.error || 'Connection failed';
+          el.manageAuditError.style.display = '';
+        }
+      } catch (e) {
+        el.manageAuditError.textContent = e.message;
+        el.manageAuditError.style.display = '';
+      } finally {
+        el.manageAuditConnect.disabled = false;
+        el.manageAuditConnect.textContent = 'Connect';
+      }
+    };
+  });
+}
+
+async function connectAuditWithSavedCreds() {
+  const creds = loadAuditCreds();
+  if (!creds) return false;
+  try {
+    const result = await window.k8sApi.connectAuditDb(creds.username, creds.password);
+    if (result.ok) {
+      state.manage.auditConnected = true;
+      state.manage.auditServer = result.server;
+      state.manage.auditDatabase = result.database;
+      showAuditStatus(`✓ Connected to ${result.server}`, 'connected');
+      updateWriteGate();
+      return true;
+    }
+  } catch { /* ignore */ }
+  clearAuditCreds();
+  showAuditStatus('Auto-connect failed — click to reconfigure', 'error');
+  return false;
+}
+
+async function handleAuditToggle(enabled) {
+  state.manage.auditEnabled = enabled;
+  saveManageSettings();
+
+  if (!enabled) {
+    // Disconnect
+    state.manage.auditConnected = false;
+    state.manage.auditServer = null;
+    state.manage.auditDatabase = null;
+    showAuditStatus('', '');
+    updateWriteGate();
+    try { await window.k8sApi.disconnectAuditDb(); } catch { /* ignore */ }
+    return;
+  }
+
+  // Try auto-connect with saved creds
+  const ok = await connectAuditWithSavedCreds();
+  if (ok) return;
+
+  // Show credential overlay
+  const result = await showAuditOverlay();
+  if (!result) {
+    // User cancelled — uncheck
+    state.manage.auditEnabled = false;
+    el.manageSettingAudit.checked = false;
+    saveManageSettings();
+    updateWriteGate();
+    return;
+  }
+
+  state.manage.auditConnected = true;
+  state.manage.auditServer = result.server;
+  state.manage.auditDatabase = result.database;
+  showAuditStatus(`✓ Connected to ${result.server}`, 'connected');
+  updateWriteGate();
+}
+
+el.manageSettingAudit.addEventListener('change', () => {
+  handleAuditToggle(el.manageSettingAudit.checked);
+});
+
+// Auto-init audit on app startup if previously enabled
+async function initAuditOnStartup() {
+  if (!state.manage.auditEnabled) {
+    updateWriteGate();
+    return;
+  }
+  el.manageSettingAudit.checked = true;
+  showAuditStatus('Connecting…', '');
+  const ok = await connectAuditWithSavedCreds();
+  if (!ok) {
+    showAuditStatus('Saved credentials expired — open Settings to reconnect', 'error');
+  }
+}
+// Defer to after app init — called in the manage-enter flow
 
 /* ════════════════════════════════════════════════════════════════════════════
    K8S MANAGE — Resizable columns (sidebar ↔ main ↔ drawer)
@@ -1887,6 +2415,11 @@ const MANAGE_CLUSTER_SCOPED_KINDS = ['nodes', 'pvs', 'namespaces', 'clusterroles
 // namespace when browsing all-namespaces, since the header namespace is just the sentinel there.
 function manageRowNamespace(row) {
   return state.manage.namespace === MANAGE_ALL_NAMESPACES ? (row.namespace || '') : state.manage.namespace;
+}
+
+function isSameResource(r1, r2) {
+  if (!r1 || !r2) return false;
+  return r1.name === r2.name && (r1.namespace || '') === (r2.namespace || '');
 }
 
 const MANAGE_COLUMN_DEFS = {
@@ -2186,6 +2719,7 @@ function selectManageKind(kind) {
     el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
     closeManageDrawer();
     stopManagePolling();
+    stopManageWatch();
     stopManageMetricsPolling();
     el.manageTableWrap.style.display = 'none';
     el.manageOverviewPane.style.display = 'flex';
@@ -2207,6 +2741,7 @@ function selectManageKind(kind) {
   closeManageDrawer();
   stopManageOverviewPolling();
   stopManagePolling();
+  stopManageWatch();
   stopManageMetricsPolling();
 
   // Restore cached rows instantly (avoids blank table while HTTP request is in-flight).
@@ -2217,11 +2752,15 @@ function selectManageKind(kind) {
     el.manageRefreshStatus.textContent = 'Refreshing…';
   }
 
-  if (data.context && data.namespace) {
-    refreshManageResources();
-    startManagePolling();
-    startManageMetricsPolling();
-  }
+  // Debounce: if user clicks multiple kinds within 100ms, only fire IPC for the last one.
+  // Cached data above is rendered immediately — only the HTTP request is delayed.
+  clearTimeout(selectManageKind._debounce);
+  selectManageKind._debounce = setTimeout(() => {
+    if (data.context && data.namespace) {
+      startManageLiveUpdates(kind, data.namespace);
+      startManageMetricsPolling();
+    }
+  }, 100);
 }
 
 // ── Diff-update renderer ─────────────────────────────────────────────────────
@@ -2305,23 +2844,86 @@ function _manageUpdateTr(tr, cols, row) {
   }
 }
 
+// Column sorting: kind (or CRD name, which renderManageTable is also called with) -> {key, dir}.
+// Sparkline columns (no scalar value) are deliberately excluded from sorting.
+const manageSortState = new Map();
+
+function applyManageSort(kind, rows) {
+  const sort = manageSortState.get(kind);
+  if (!sort) return rows;
+  const { key, dir } = sort;
+  return rows.slice().sort((a, b) => {
+    const av = a[key], bv = b[key];
+    const an = Number(av), bn = Number(bv);
+    const bothNumeric = av !== '' && bv !== '' && av != null && bv != null && !Number.isNaN(an) && !Number.isNaN(bn);
+    const cmp = bothNumeric ? (an - bn) : String(av ?? '').localeCompare(String(bv ?? ''));
+    return cmp * dir;
+  });
+}
+
 function renderManageTable(kind, rows) {
   const cols = getManageColumns(kind);
   const query = (el.manageSearch.value || '').toLowerCase();
-  const filtered = query ? rows.filter((r) => (r.name || '').toLowerCase().includes(query)) : rows;
+  let filtered = query ? rows.filter((r) => (r.name || '').toLowerCase().includes(query)) : rows;
+  filtered = applyManageSort(kind, filtered);
   state.manage._lastFiltered = filtered;
 
   // Always rebuild <thead> (cheap, one row)
-  el.manageThead.innerHTML = `<tr><th class="manage-select-col"><input type="checkbox" id="manage-select-all" /></th>${cols.map((c) => `<th>${escHtml(c.label)}</th>`).join('')}</tr>`;
+  const sort = manageSortState.get(kind);
+  el.manageThead.innerHTML = `<tr><th class="manage-select-col"><input type="checkbox" id="manage-select-all" /></th>${cols.map((c) => {
+    if (c.spark) return `<th>${escHtml(c.label)}</th>`; // no scalar value to sort by
+    const arrow = sort && sort.key === c.key ? (sort.dir === 1 ? ' ▲' : ' ▼') : '';
+    return `<th class="manage-sortable-th" data-sort-key="${escHtml(c.key)}">${escHtml(c.label)}${arrow}</th>`;
+  }).join('')}</tr>`;
   const selectAllBox = $('manage-select-all');
 
   if (filtered.length === 0) {
+    _vsCleanup();
     el.manageTbody.innerHTML = `<tr><td colspan="${cols.length + 1}" class="manage-empty">${query ? 'No match' : 'No resources found'}</td></tr>`;
     if (selectAllBox) selectAllBox.disabled = true;
     return;
   }
 
-  // ── Diff-update: build a map of existing rows by key ────────────────────────
+  if (filtered.length > _VS_THRESHOLD) {
+    // ── Virtual scroll path ────────────────────────────────────────────────
+    _vsRender(kind, cols, filtered);
+  } else {
+    // ── Standard diff-update path (<= threshold) ──────────────────────────
+    _vsCleanup();
+    _renderManageTableStandard(kind, cols, filtered);
+  }
+
+  updateManageSelectAllState(filtered);
+  if (selectAllBox) {
+    selectAllBox.addEventListener('change', () => {
+      for (const row of filtered) {
+        const key = manageSelectionKey(row);
+        if (selectAllBox.checked) state.manage.selection.add(key);
+        else state.manage.selection.delete(key);
+      }
+      renderManageTable(kind, rows);
+      renderManageBulkBar();
+    });
+  }
+  renderManageMetricsSparklines();
+}
+
+// Delegated on the persistent <thead> element itself (its innerHTML is rebuilt every render,
+// but the element reference stays the same, so a listener attached once still sees new clicks).
+el.manageThead.addEventListener('click', (e) => {
+  const th = e.target.closest('[data-sort-key]');
+  if (!th) return;
+  const key = th.dataset.sortKey;
+  const kind = state.manage.mode === 'crd' ? state.manage.activeCrd.name : state.manage.resourceType;
+  const current = manageSortState.get(kind);
+  manageSortState.set(kind, current && current.key === key ? { key, dir: -current.dir } : { key, dir: 1 });
+  renderManageTable(kind, state.manage.rows);
+});
+
+// ── Standard diff-update table renderer (existing logic, extracted) ──────────
+
+function _renderManageTableStandard(kind, cols, filtered) {
+  // ── Diff-update: build a map of existing rows by key ────────────────────
   const existingMap = new Map();
   for (const tr of Array.from(el.manageTbody.children)) {
     if (tr.dataset.rowKey) existingMap.set(tr.dataset.rowKey, tr);
@@ -2377,20 +2979,103 @@ function renderManageTable(kind, rows) {
       prevTr = tr;
     }
   }
+}
 
-  updateManageSelectAllState(filtered);
-  if (selectAllBox) {
-    selectAllBox.addEventListener('change', () => {
-      for (const row of filtered) {
-        const key = manageSelectionKey(row);
-        if (selectAllBox.checked) state.manage.selection.add(key);
-        else state.manage.selection.delete(key);
-      }
-      renderManageTable(kind, rows);
-      renderManageBulkBar();
-    });
+// ── Virtual scroll renderer (>200 rows) ─────────────────────────────────────
+// Renders only the rows visible in the viewport + a buffer above/below.
+// Uses two spacer <tr> elements to maintain correct scrollbar/total height.
+
+const _VS_THRESHOLD = 200;
+const _VS_ROW_HEIGHT = 34;   // must match CSS row height (px)
+const _VS_BUFFER = 10;       // extra rows above/below viewport
+
+let _vsState = null;          // { kind, cols, filtered, onScroll }
+
+function _vsCleanup() {
+  if (_vsState) {
+    el.manageTableWrap.removeEventListener('scroll', _vsState.onScroll);
+    _vsState = null;
   }
-  renderManageMetricsSparklines();
+}
+
+function _vsRender(kind, cols, filtered) {
+  const total = filtered.length;
+  const totalHeight = total * _VS_ROW_HEIGHT;
+  const wrapEl = el.manageTableWrap;
+  const viewportH = wrapEl.clientHeight;
+  const colCount = cols.length + 1; // +1 for checkbox
+
+  // Create or update scroll handler
+  if (_vsState) {
+    wrapEl.removeEventListener('scroll', _vsState.onScroll);
+  }
+
+  _vsState = { kind, cols, filtered, onScroll: null, rafId: 0, lastStart: -1, lastEnd: -1 };
+
+  function renderWindow() {
+    const scrollTop = wrapEl.scrollTop;
+    const start = Math.max(0, Math.floor(scrollTop / _VS_ROW_HEIGHT) - _VS_BUFFER);
+    const visibleCount = Math.ceil(viewportH / _VS_ROW_HEIGHT);
+    const end = Math.min(total, start + visibleCount + _VS_BUFFER * 2);
+
+    // Skip if window hasn't changed
+    if (start === _vsState.lastStart && end === _vsState.lastEnd) return;
+    _vsState.lastStart = start;
+    _vsState.lastEnd = end;
+
+    const topH = start * _VS_ROW_HEIGHT;
+    const bottomH = Math.max(0, (total - end) * _VS_ROW_HEIGHT);
+
+    el.manageTbody.innerHTML = '';
+    const frag = document.createDocumentFragment();
+
+    // Top spacer
+    if (topH > 0) {
+      const spacer = document.createElement('tr');
+      spacer.className = 'manage-vs-spacer';
+      const td = document.createElement('td');
+      td.colSpan = colCount;
+      td.style.height = topH + 'px';
+      td.style.padding = '0';
+      td.style.border = 'none';
+      spacer.appendChild(td);
+      frag.appendChild(spacer);
+    }
+
+    // Visible rows
+    for (let i = start; i < end; i++) {
+      frag.appendChild(_manageCreateTr(kind, cols, filtered[i]));
+    }
+
+    // Bottom spacer
+    if (bottomH > 0) {
+      const spacer = document.createElement('tr');
+      spacer.className = 'manage-vs-spacer';
+      const td = document.createElement('td');
+      td.colSpan = colCount;
+      td.style.height = bottomH + 'px';
+      td.style.padding = '0';
+      td.style.border = 'none';
+      spacer.appendChild(td);
+      frag.appendChild(spacer);
+    }
+
+    el.manageTbody.appendChild(frag);
+    renderManageMetricsSparklines();
+  }
+
+  // Initial render
+  renderWindow();
+
+  // Scroll handler with requestAnimationFrame
+  _vsState.onScroll = () => {
+    if (_vsState.rafId) return;
+    _vsState.rafId = requestAnimationFrame(() => {
+      _vsState.rafId = 0;
+      renderWindow();
+    });
+  };
+  wrapEl.addEventListener('scroll', _vsState.onScroll, { passive: true });
 }
 
 function updateManageSelectAllState(filteredRows) {
@@ -2458,15 +3143,106 @@ function stopManagePolling() {
   }
 }
 
+/* ── K8s Manage: real-time watch (Phase 16) ─────────────────────────────────
+   High-churn kinds get a live k8s watch stream instead of a poll timer. Kept in sync by hand
+   with WATCH_ENABLED_KINDS in main.js (no shared module between the two processes). */
+const WATCH_ENABLED_KINDS = ['pods', 'deployments', 'replicasets', 'statefulsets', 'daemonsets', 'jobs', 'events'];
+
+function startManageWatch(kind, namespace) {
+  stopManageWatch();
+  const data = state.manage;
+  const sid = crypto.randomUUID();
+
+  // Subscribe before starting the stream so the first sync/event can't race past us.
+  const disposers = [
+    window.k8sApi.onWatchSync(sid, ({ rows }) => {
+      data.rows = rows;
+      _manageRowsCache.set(_manageRowsCacheKey(namespace, kind), rows);
+      renderManageTable(kind, rows);
+      el.manageRefreshStatus.textContent = `Live · ${new Date().toLocaleTimeString()}`;
+      if (data.enableMetrics && MANAGE_METRICS_KINDS.includes(kind)) refreshManageMetrics();
+    }),
+    window.k8sApi.onWatchEvent(sid, ({ type, row }) => {
+      applyManageWatchDelta(kind, type, row);
+      el.manageRefreshStatus.textContent = `Live · ${new Date().toLocaleTimeString()}`;
+    }),
+    window.k8sApi.onWatchError(sid, ({ message, permanent }) => {
+      if (permanent) {
+        // Most likely the `watch` verb is RBAC-denied even though list/get are allowed —
+        // fall back silently to the pre-existing poll timer for this kind.
+        stopManageWatch();
+        el.manageRefreshStatus.textContent = 'Live updates unavailable — polling';
+        refreshManageResources();
+        startManagePolling();
+      } else {
+        el.manageRefreshStatus.textContent = message || 'Reconnecting live updates…';
+      }
+    }),
+  ];
+  data.watchSession = { sid, kind, namespace, disposers };
+  window.k8sApi.startWatch(data.kubeconfig, data.context, namespace, kind, sid);
+}
+
+function stopManageWatch() {
+  const session = state.manage.watchSession;
+  if (!session) return;
+  window.k8sApi.stopWatch(session.sid);
+  session.disposers.forEach((dispose) => dispose());
+  state.manage.watchSession = null;
+}
+
+// Applies one ADDED/MODIFIED/DELETED delta directly onto state.manage.rows, then re-renders
+// through the existing diff-by-key table patching — no new rendering logic needed, watch deltas
+// and poll refreshes both funnel through the same renderManageTable().
+function applyManageWatchDelta(kind, type, row) {
+  const data = state.manage;
+  if (data.mode !== 'kind' || data.resourceType !== kind) return; // stale event from a superseded view
+  const key = manageSelectionKey(row);
+  const idx = data.rows.findIndex((r) => manageSelectionKey(r) === key);
+  if (type === 'DELETED') {
+    if (idx !== -1) data.rows.splice(idx, 1);
+  } else {
+    if (idx !== -1) data.rows[idx] = row;
+    else data.rows.push(row);
+  }
+  _manageRowsCache.set(_manageRowsCacheKey(data.namespace, kind), data.rows);
+  renderManageTable(kind, data.rows);
+}
+
+// Shared by every call site that used to do `refreshManageResources(); startManagePolling();` —
+// watch-enabled kinds get a live stream instead when Auto-Poll is on; when Auto-Poll is off, a
+// watch-enabled kind gets the same one-shot-only behavior Tier-2 kinds already had (no timer,
+// no watch — matches the existing "Auto-Poll off" convention rather than overriding it).
+function startManageLiveUpdates(kind, namespace) {
+  if (WATCH_ENABLED_KINDS.includes(kind) && state.manage.enableAutoRefresh) {
+    startManageWatch(kind, namespace);
+  } else {
+    refreshManageResources();
+    if (!WATCH_ENABLED_KINDS.includes(kind)) startManagePolling();
+  }
+}
+
 /* ── K8s Manage: bulk actions ────────────────────────────────────────────── */
 
 function renderManageBulkBar() {
   const n = state.manage.selection.size;
   el.manageBulkBar.style.display = n > 0 ? 'flex' : 'none';
   el.manageBulkCount.textContent = `${n} selected`;
-  const kind = state.manage.resourceType;
+  const kind = state.manage.mode === 'crd' ? null : state.manage.resourceType;
   const restartBtn = el.manageBulkBar.querySelector('[data-bulk-action="restart"]');
+  const scaleBtn = el.manageBulkBar.querySelector('[data-bulk-action="scale"]');
+  const cordonBtn = el.manageBulkBar.querySelector('[data-bulk-action="cordon"]');
+  const uncordonBtn = el.manageBulkBar.querySelector('[data-bulk-action="uncordon"]');
   restartBtn.style.display = ['deployments', 'statefulsets', 'daemonsets'].includes(kind) ? '' : 'none';
+  scaleBtn.style.display = ['deployments', 'statefulsets'].includes(kind) ? '' : 'none';
+  cordonBtn.style.display = kind === 'nodes' ? '' : 'none';
+  uncordonBtn.style.display = kind === 'nodes' ? '' : 'none';
+  // Write gate: disable all bulk action buttons when audit not connected
+  const locked = !state.manage.writeUnlocked;
+  el.manageBulkBar.querySelectorAll('[data-bulk-action]').forEach((b) => {
+    b.disabled = locked;
+    b.title = locked ? 'Enable Audit in Settings to unlock' : '';
+  });
 }
 
 el.manageBulkBar.addEventListener('click', (e) => {
@@ -2491,12 +3267,14 @@ async function mapLimit(items, limit, fn) {
 }
 
 async function runManageBulkAction(action) {
+  if (!state.manage.writeUnlocked) return;
   const data = state.manage;
   const kind = data.mode === 'crd' ? data.activeCrd.name : data.resourceType;
   const kindLabel = data.mode === 'crd' ? data.activeCrd.kind : (MANAGE_KIND_SINGULAR[kind] || kind);
   const rows = data.rows.filter((r) => data.selection.has(manageSelectionKey(r)));
   if (rows.length === 0) return;
 
+  let payload;
   if (action === 'delete') {
     const { ok } = await showManageConfirm({
       title: `Delete ${rows.length} ${kindLabel}(s)?`,
@@ -2513,6 +3291,25 @@ async function runManageBulkAction(action) {
       confirmLabel: 'Restart',
     });
     if (!ok) return;
+  } else if (action === 'scale') {
+    const current = rows[0]?.ready ? Number(String(rows[0].ready).split('/')[1]) || 0 : 0;
+    const { ok, value } = await showManageConfirm({
+      title: `Scale ${rows.length} resources?`,
+      body: 'Every selected resource is scaled to the same replica count.',
+      confirmLabel: 'Scale',
+      numberInput: { current },
+    });
+    if (!ok) return;
+    payload = { replicas: value };
+  } else if (action === 'cordon' || action === 'uncordon') {
+    const { ok } = await showManageConfirm({
+      title: `${action === 'cordon' ? 'Cordon' : 'Uncordon'} ${rows.length} nodes?`,
+      body: action === 'cordon'
+        ? 'Marks every selected node unschedulable — existing pods keep running, no new pods are scheduled onto them.'
+        : 'Marks every selected node schedulable again.',
+      confirmLabel: action === 'cordon' ? 'Cordon' : 'Uncordon',
+    });
+    if (!ok) return;
   } else {
     return;
   }
@@ -2523,7 +3320,7 @@ async function runManageBulkAction(action) {
           data.kubeconfig, data.context, manageRowNamespace(row),
           data.activeCrd.group, data.activeCrd.version, data.activeCrd.plural, row.name, data.activeCrd.namespaced, action
         )
-      : await window.k8sApi.resourceAction(data.kubeconfig, data.context, manageRowNamespace(row), kind, row.name, action, undefined);
+      : await window.k8sApi.resourceAction(data.kubeconfig, data.context, manageRowNamespace(row), kind, row.name, action, payload);
     return { row, result };
   });
 
@@ -2613,12 +3410,12 @@ function renderManageOverview(digest) {
         el.manageNamespace.value = MANAGE_ALL_NAMESPACES;
         state.manage.namespace = MANAGE_ALL_NAMESPACES;
       }
+      // selectManageKind(kind) above already schedules the right live-update mechanism
+      // (poll or watch) via its own debounce — this fetch is just to open the drawer now.
       refreshManageResources().then(() => {
         const found = state.manage.rows.find((r) => r.name === name && (r.namespace || '') === namespace);
         if (found) openManageDrawer(kind, found);
       });
-      startManagePolling();
-      startManageMetricsPolling();
     });
   });
 }
@@ -2712,6 +3509,7 @@ function selectManageCrd(crd) {
   closeManageDrawer();
   stopManageOverviewPolling();
   stopManagePolling();
+  stopManageWatch();
   stopManageMetricsPolling();
   if (data.context && (data.namespace || !crd.namespaced)) {
     refreshManageResources();
@@ -2750,7 +3548,7 @@ function runGlobalManageSearch() {
   el.manageSearchResults.style.display = 'flex';
   el.manageSearchResultsTitle.textContent = `Searching for "${query}"…`;
   el.manageSearchResultsBody.innerHTML = '';
-  window.k8sApi.searchResources(data.kubeconfig, data.context, data.namespace || '', query).then((result) => {
+  window.k8sApi.searchResources(data.kubeconfig, data.context, data.namespace || '', query, state.manage.crds).then((result) => {
     if (!result.ok) {
       el.manageSearchResultsTitle.textContent = `Search failed`;
       el.manageSearchResultsBody.innerHTML = `<div class="manage-empty">${escHtml(result.error)}</div>`;
@@ -2761,22 +3559,43 @@ function runGlobalManageSearch() {
       el.manageSearchResultsBody.innerHTML = '<div class="manage-empty">No matches</div>';
       return;
     }
-    el.manageSearchResultsBody.innerHTML = result.results.map((r) => `
-      <div class="manage-search-result-row" data-kind="${escHtml(r.kind)}" data-namespace="${escHtml(r.namespace || '')}" data-name="${escHtml(r.name)}">
-        <span class="manage-search-result-kind">${escHtml(MANAGE_KIND_LABEL_PLURAL[r.kind] || r.kind)}</span>
+    el.manageSearchResultsBody.innerHTML = result.results.map((r, i) => `
+      <div class="manage-search-result-row" data-index="${i}" data-namespace="${escHtml(r.namespace || '')}" data-name="${escHtml(r.name)}">
+        <span class="manage-search-result-kind">${escHtml(r.crd ? r.kind : (MANAGE_KIND_LABEL_PLURAL[r.kind] || r.kind))}</span>
         <span class="manage-search-result-name">${escHtml(r.namespace ? `${r.namespace}/${r.name}` : r.name)}</span>
       </div>`).join('')
       + (result.errors.length ? `<div class="manage-search-errors">Couldn't search: ${result.errors.map((e) => `${e.kind} (${e.error})`).join(', ')}</div>` : '');
 
     el.manageSearchResultsBody.querySelectorAll('.manage-search-result-row').forEach((rowEl) => {
       rowEl.addEventListener('click', () => {
-        const kind = rowEl.dataset.kind;
+        const r = result.results[Number(rowEl.dataset.index)];
         const namespace = rowEl.dataset.namespace;
         const name = rowEl.dataset.name;
         closeManageSearchResults();
+
+        if (r.crd) {
+          const crd = state.manage.crds.find((c) => c.group === r.group && c.version === r.version && c.plural === r.plural);
+          if (!crd) return;
+          selectManageCrd(crd);
+          const applyRow = () => {
+            const row = state.manage.rows.find((row2) => row2.name === name && (row2.namespace || '') === namespace);
+            if (row) openManageDrawer(crd.name, row);
+          };
+          if (namespace && el.manageNamespace.querySelector(`option[value="${CSS.escape(namespace)}"]`)) {
+            el.manageNamespace.value = namespace;
+            state.manage.namespace = namespace;
+          } else if (crd.namespaced) {
+            el.manageNamespace.value = MANAGE_ALL_NAMESPACES;
+            state.manage.namespace = MANAGE_ALL_NAMESPACES;
+          }
+          refreshManageCustomResources().then(applyRow);
+          return;
+        }
+
+        const kind = r.kind;
         selectManageKind(kind);
         const applyRow = () => {
-          const row = state.manage.rows.find((r) => r.name === name && (r.namespace || '') === namespace);
+          const row = state.manage.rows.find((row2) => row2.name === name && (row2.namespace || '') === namespace);
           if (row) openManageDrawer(kind, row);
         };
         if (namespace && el.manageNamespace.querySelector(`option[value="${CSS.escape(namespace)}"]`)) {
@@ -2786,9 +3605,9 @@ function runGlobalManageSearch() {
           el.manageNamespace.value = MANAGE_ALL_NAMESPACES;
           state.manage.namespace = MANAGE_ALL_NAMESPACES;
         }
+        // selectManageKind(kind) above already schedules the right live-update mechanism
+        // (poll or watch) via its own debounce — this fetch is just to open the drawer now.
         refreshManageResources().then(applyRow);
-        startManagePolling();
-        startManageMetricsPolling();
       });
     });
   });
@@ -2941,6 +3760,7 @@ function openManageDrawer(kind, row) {
   stopManageExec();
   state.manage.selected = row;
   state.manage.revealSecrets = false;
+  state.manage.yamlEditing = false;
   el.manageYamlReveal.checked = false;
   el.manageDrawer.classList.add('open');
   // In CRD mode, append the Kind+group so two same-named resources under different API groups
@@ -2975,6 +3795,7 @@ function closeManageDrawer() {
   stopManageExec();
   state.manage.selected = null;
   state.manage.revealSecrets = false;
+  state.manage.yamlEditing = false;
   el.manageDrawer.classList.remove('open');
 }
 
@@ -3014,11 +3835,16 @@ function getManageActionsFor(kind, row) {
 
 function renderManageDrawerActions(kind, row) {
   const actions = getManageActionsFor(kind, row);
+  const locked = !state.manage.writeUnlocked;
   el.manageDrawerActions.innerHTML = actions
-    .map((a) => `<button class="btn btn-xs ${a.danger ? 'btn-danger' : 'btn-ghost'}" data-action="${a.action}">${escHtml(a.label)}</button>`)
+    .map((a) => {
+      const disabled = locked ? ' disabled' : '';
+      const title = locked ? ' title="Enable Audit in Settings to unlock"' : '';
+      return `<button class="btn btn-xs ${a.danger ? 'btn-danger' : 'btn-ghost'}" data-action="${a.action}"${disabled}${title}>${escHtml(a.label)}</button>`;
+    })
     .join('');
   el.manageDrawerActions.querySelectorAll('button[data-action]').forEach((btn) => {
-    btn.addEventListener('click', () => runManageAction(kind, row, btn.dataset.action));
+    if (!btn.disabled) btn.addEventListener('click', () => runManageAction(kind, row, btn.dataset.action));
   });
 }
 
@@ -3143,6 +3969,7 @@ function switchManageTab(tab) {
   el.manageExecPane.style.display = tab === 'exec' ? 'flex' : 'none';
   el.managePfPane.style.display = tab === 'portforward' ? 'flex' : 'none';
   el.manageMetricsPane.style.display = tab === 'metrics' ? 'flex' : 'none';
+  el.manageHistoryPane.style.display = tab === 'history' ? 'flex' : 'none';
   if (tab === 'yaml') loadManageYaml();
   if (tab === 'events') loadManageEvents();
   if (tab === 'access') loadManageAccess();
@@ -3164,6 +3991,9 @@ function switchManageTab(tab) {
   if (tab === 'metrics') {
     renderManageMetricsPane();
   }
+  if (tab === 'history') {
+    loadManageHistory();
+  }
 }
 
 // Fetches are one-shot (not polled); each captures the resource identity at request time and
@@ -3172,6 +4002,8 @@ async function loadManageYaml() {
   const data = state.manage;
   const row = data.selected;
   if (!row) return;
+  data.yamlEditing = false;
+  switchManageYamlView();
   el.manageYamlOutput.textContent = 'Loading…';
 
   if (data.mode === 'crd') {
@@ -3179,8 +4011,10 @@ async function loadManageYaml() {
     const result = await window.k8sApi.getCustomResourceYaml(
       data.kubeconfig, data.context, manageRowNamespace(row), crd.group, crd.version, crd.plural, row.name, crd.namespaced
     );
-    if (data.selected !== row) return;
+    if (!isSameResource(data.selected, row)) return;
     el.manageYamlOutput.textContent = result.ok ? result.yaml : `Error: ${result.error}`;
+    data.yamlEditable = result.ok ? result.editable !== false : false;
+    renderManageYamlEditGate();
     return;
   }
 
@@ -3188,8 +4022,110 @@ async function loadManageYaml() {
   const result = await window.k8sApi.getResourceYaml(
     data.kubeconfig, data.context, manageRowNamespace(row), kind, row.name, { reveal: data.revealSecrets }
   );
-  if (data.selected !== row || data.resourceType !== kind) return;
+  if (!isSameResource(data.selected, row) || data.resourceType !== kind) return;
   el.manageYamlOutput.textContent = result.ok ? result.yaml : `Error: ${result.error}`;
+  data.yamlEditable = result.ok ? result.editable !== false : false;
+  renderManageYamlEditGate();
+}
+
+function renderManageYamlEditGate() {
+  const data = state.manage;
+  const canEdit = data.yamlEditable && data.writeUnlocked;
+  el.manageYamlEdit.disabled = !canEdit;
+  if (!data.writeUnlocked) {
+    el.manageYamlEdit.title = 'Enable Audit in Settings to unlock editing';
+  } else if (!data.yamlEditable) {
+    el.manageYamlEdit.title = 'Enable "Reveal secret values" to edit this Secret';
+  } else {
+    el.manageYamlEdit.title = '';
+  }
+}
+
+function switchManageYamlView() {
+  const editing = state.manage.yamlEditing;
+  el.manageYamlOutput.style.display = editing ? 'none' : '';
+  el.manageYamlTextarea.style.display = editing ? '' : 'none';
+  el.manageYamlEdit.style.display = editing ? 'none' : '';
+  el.manageYamlSave.style.display = editing ? '' : 'none';
+  el.manageYamlCancel.style.display = editing ? '' : 'none';
+  el.manageYamlReload.style.display = 'none';
+  el.manageYamlCopy.style.display = editing ? 'none' : '';
+  el.manageYamlError.style.display = 'none';
+}
+
+async function enterManageYamlEdit() {
+  const data = state.manage;
+  const row = data.selected;
+  if (!row || !data.yamlEditable || !data.writeUnlocked) return;
+  el.manageYamlError.style.display = 'none';
+  el.manageYamlOutput.textContent = 'Loading…';
+
+  let result;
+  if (data.mode === 'crd') {
+    const crd = data.activeCrd;
+    result = await window.k8sApi.getCustomResourceYaml(
+      data.kubeconfig, data.context, manageRowNamespace(row), crd.group, crd.version, crd.plural, row.name, crd.namespaced, { forEdit: true }
+    );
+  } else {
+    result = await window.k8sApi.getResourceYaml(
+      data.kubeconfig, data.context, manageRowNamespace(row), data.resourceType, row.name, { reveal: data.revealSecrets, forEdit: true }
+    );
+  }
+  if (!isSameResource(data.selected, row)) return; // stale guard — user switched rows while this was in flight
+  if (!result.ok) {
+    el.manageYamlOutput.textContent = `Error: ${result.error}`;
+    return;
+  }
+  data.yamlEditing = true;
+  el.manageYamlTextarea.value = result.yaml;
+  switchManageYamlView();
+}
+
+function cancelManageYamlEdit() {
+  state.manage.yamlEditing = false;
+  loadManageYaml(); // back to the plain read-only view with a fresh fetch
+}
+
+async function saveManageYamlEdit() {
+  const data = state.manage;
+  const row = data.selected;
+  if (!row) return;
+  const { ok } = await showManageConfirm({
+    title: `Apply changes to ${row.name}?`,
+    body: 'This overwrites the resource on the cluster with your edited YAML.',
+    confirmLabel: 'Apply',
+  });
+  if (!ok) return;
+
+  const yamlText = el.manageYamlTextarea.value;
+  let result;
+  if (data.mode === 'crd') {
+    const crd = data.activeCrd;
+    result = await window.k8sApi.applyCustomResourceYaml(
+      data.kubeconfig, data.context, manageRowNamespace(row), crd.group, crd.version, crd.plural, row.name, crd.namespaced, yamlText,
+      row.metadata?.resourceVersion
+    );
+  } else {
+    result = await window.k8sApi.applyResourceYaml(
+      data.kubeconfig, data.context, manageRowNamespace(row), data.resourceType, row.name, yamlText,
+      row.metadata?.resourceVersion
+    );
+  }
+  if (!isSameResource(data.selected, row)) return; // stale guard
+
+  if (!result.ok) {
+    el.manageYamlError.style.display = '';
+    el.manageYamlError.textContent = result.error;
+    el.manageYamlReload.style.display = result.kind === 'conflict' ? '' : 'none';
+    return;
+  }
+  el.manageYamlError.style.display = 'none';
+  el.manageYamlReload.style.display = 'none';
+  data.yamlEditing = false;
+  el.manageYamlOutput.textContent = result.yaml; // the visible <pre> — was left stuck on "Loading…" otherwise
+  el.manageYamlTextarea.value = result.yaml;
+  switchManageYamlView();
+  refreshManageResources(); // row list may reflect the change (e.g. labels, replicas)
 }
 
 el.manageYamlCopy.addEventListener('click', () => {
@@ -3198,8 +4134,15 @@ el.manageYamlCopy.addEventListener('click', () => {
 
 el.manageYamlReveal.addEventListener('change', () => {
   state.manage.revealSecrets = el.manageYamlReveal.checked;
+  // The resourceVersion snapshot and redaction state are now stale — bail out of edit mode.
+  if (state.manage.yamlEditing) state.manage.yamlEditing = false;
   loadManageYaml();
 });
+
+el.manageYamlEdit.addEventListener('click', enterManageYamlEdit);
+el.manageYamlCancel.addEventListener('click', cancelManageYamlEdit);
+el.manageYamlSave.addEventListener('click', saveManageYamlEdit);
+el.manageYamlReload.addEventListener('click', enterManageYamlEdit);
 
 async function loadManageEvents() {
   const data = state.manage;
@@ -3208,40 +4151,91 @@ async function loadManageEvents() {
   el.manageEventsThead.innerHTML = `<tr>${MANAGE_EVENTS_PANE_COLUMNS.map((c) => `<th>${escHtml(c.label)}</th>`).join('')}</tr>`;
   el.manageEventsTbody.innerHTML = `<tr><td colspan="${MANAGE_EVENTS_PANE_COLUMNS.length}" class="manage-empty">Loading…</td></tr>`;
 
-  let result;
-  if (data.mode === 'crd') {
-    const crd = data.activeCrd;
-    result = await window.k8sApi.getCustomResourceEvents(data.kubeconfig, data.context, manageRowNamespace(row), crd.kind, row.name, crd.namespaced);
-  } else {
-    result = await window.k8sApi.getResourceEvents(data.kubeconfig, data.context, manageRowNamespace(row), data.resourceType, row.name);
-  }
-  if (data.selected !== row) return;
-  if (!result.ok) {
-    el.manageEventsTbody.innerHTML = `<tr><td colspan="${MANAGE_EVENTS_PANE_COLUMNS.length}" class="manage-empty">${escHtml(result.error)}</td></tr>`;
+  const namespace = manageRowNamespace(row);
+  const kindLabel = data.mode === 'crd' ? data.activeCrd.kind : MANAGE_KIND_LABEL[data.resourceType];
+
+  // Fetch song song live events và local events
+  const [liveRes, localRes] = await Promise.all([
+    data.mode === 'crd'
+      ? window.k8sApi.getCustomResourceEvents(data.kubeconfig, data.context, namespace, data.activeCrd.kind, row.name, data.activeCrd.namespaced)
+      : window.k8sApi.getResourceEvents(data.kubeconfig, data.context, namespace, data.resourceType, row.name),
+    window.k8sApi.getLocalEvents({ namespace, kind: kindLabel, name: row.name })
+  ]);
+
+  if (!isSameResource(data.selected, row)) return;
+
+  const liveRows = liveRes.ok ? liveRes.rows : [];
+  const localRows = localRes.ok ? localRes.rows : [];
+
+  if (!liveRes.ok && !localRes.ok) {
+    el.manageEventsTbody.innerHTML = `<tr><td colspan="${MANAGE_EVENTS_PANE_COLUMNS.length}" class="manage-empty">Failed to load events: ${escHtml(liveRes.error || localRes.error)}</td></tr>`;
     return;
   }
-  if (result.rows.length === 0) {
+
+  // Merge events theo UID
+  const mergedMap = new Map();
+
+  // Local events trước
+  for (const r of localRows) {
+    if (r.uid) {
+      mergedMap.set(r.uid, r);
+    }
+  }
+
+  // Live events ghi đè lên local events nếu cùng UID
+  for (const r of liveRows) {
+    const key = r.uid || `${r.reason}-${r.message}-${r._ts}`;
+    mergedMap.set(key, r);
+  }
+
+  const mergedRows = Array.from(mergedMap.values());
+
+  if (mergedRows.length === 0) {
     el.manageEventsTbody.innerHTML = `<tr><td colspan="${MANAGE_EVENTS_PANE_COLUMNS.length}" class="manage-empty">No events</td></tr>`;
     return;
   }
-  el.manageEventsTbody.innerHTML = result.rows.map((row) => `
-    <tr>${MANAGE_EVENTS_PANE_COLUMNS.map((c) => {
-      const val = row[c.key];
-      return `<td>${escHtml(c.age ? relAge(val) : (val ?? ''))}</td>`;
-    }).join('')}</tr>`).join('');
+
+  // Sắp xếp theo timestamp giảm dần
+  const getEventTs = (e) => e._ts || e.lastTimestamp || e.lastSeen || 0;
+  mergedRows.sort((a, b) => new Date(getEventTs(b)) - new Date(getEventTs(a)));
+
+  el.manageEventsTbody.innerHTML = mergedRows.map((r) => {
+    const eventAge = r.age ? r.age : relAge(r.lastTimestamp);
+    return `
+      <tr>${MANAGE_EVENTS_PANE_COLUMNS.map((c) => {
+        let val = r[c.key];
+        if (c.age) {
+          val = eventAge;
+        }
+        
+        if (c.key === 'type' && r.isLocalDb) {
+          return `<td><span class="status-pill manage-status-local" title="Loaded from local SQLite DB">💾 ${escHtml(val)}</span></td>`;
+        }
+        return `<td>${escHtml(val ?? '')}</td>`;
+      }).join('')}</tr>`;
+  }).join('');
 }
 
 async function loadManageAccess() {
   const data = state.manage;
-  const kind = data.resourceType;
   const row = data.selected;
-  if (!row || data.mode === 'crd') {
-    el.manageAccessTbody.innerHTML = `<tr><td colspan="3" class="manage-empty">Not available for custom resources</td></tr>`;
-    return;
-  }
+  if (!row) return;
   el.manageAccessTbody.innerHTML = `<tr><td colspan="3" class="manage-empty">Checking…</td></tr>`;
-  const result = await window.k8sApi.checkAccess(data.kubeconfig, data.context, manageRowNamespace(row), kind, row.name);
-  if (data.selected !== row || data.resourceType !== kind) return;
+
+  let result;
+  if (data.mode === 'crd') {
+    const crd = data.activeCrd;
+    const crdAtStart = crd;
+    result = await window.k8sApi.checkCustomResourceAccess(
+      data.kubeconfig, data.context, manageRowNamespace(row), crd.group, crd.plural, crd.namespaced, row.name
+    );
+    if (!isSameResource(data.selected, row) || data.activeCrd !== crdAtStart) return;
+  } else {
+    const kind = data.resourceType;
+    result = await window.k8sApi.checkAccess(data.kubeconfig, data.context, manageRowNamespace(row), kind, row.name);
+    if (!isSameResource(data.selected, row) || data.resourceType !== kind) return;
+  }
+
   if (!result.ok) {
     el.manageAccessTbody.innerHTML = `<tr><td colspan="3" class="manage-empty">${escHtml(result.error)}</td></tr>`;
     return;
@@ -3563,8 +4557,13 @@ async function checkAuth() {
       showAuthModal('Kubelogin token has expired. Please login again to refresh.');
       return false;
     }
-  } catch {
-    // If check fails (e.g. az not installed), proceed silently
+  } catch (e) {
+    // The two IPC calls above already catch internally and resolve {ok:false} for the common
+    // "az CLI / kubelogin not set up" case — this outer catch only fires for something else
+    // going wrong (e.g. a broken preload bridge). Surface it visibly instead of proceeding
+    // silently, but keep the same "proceed anyway" control flow either way.
+    el.authCheckBannerText.textContent = `Couldn't verify authentication status: ${e.message}`;
+    el.authCheckBanner.style.display = 'flex';
   }
   hideLoading();
   return true;
@@ -3603,6 +4602,201 @@ el.btnAzLogin.addEventListener('click', async () => {
   startTokenCountdown();
 });
 
+el.btnTokenReauth.addEventListener('click', async () => {
+  const confirmReauth = confirm("Would you like to log out of Azure CLI and log in again?");
+  if (!confirmReauth) return;
+  showLoading('Logging out of Azure CLI…');
+  try {
+    await window.k8sApi.azLogout();
+  } catch (e) {
+    console.error('Logout error:', e);
+  }
+  hideLoading();
+  showAuthModal('Sign in to Azure to continue.');
+});
+
+/* ── K8s Manage: History tab ──────────────────────────────────────────────── */
+
+async function loadManageHistory() {
+  console.log('[audit-ui] loadManageHistory triggered');
+  const data = state.manage;
+  const row = data.selected;
+  if (!row) {
+    console.log('[audit-ui] loadManageHistory aborted: no row selected');
+    el.manageHistoryList.innerHTML = '<div class="manage-empty">Select a resource to view history</div>';
+    return;
+  }
+  if (!data.auditConnected) {
+    console.log('[audit-ui] loadManageHistory aborted: audit not connected');
+    el.manageHistoryList.innerHTML = '<div class="manage-empty">Enable Audit in Settings to view history</div>';
+    return;
+  }
+
+  el.manageHistoryList.innerHTML = '<div class="manage-empty">Loading…</div>';
+  el.manageHistoryList.style.display = '';
+  el.manageHistoryDiff.style.display = 'none';
+
+  const kind = data.mode === 'crd' ? (data.activeCrd?.kind || data.activeCrd?.name || '') : data.resourceType;
+  const namespace = manageRowNamespace(row);
+
+  console.log('[audit-ui] Fetching versions for:', {
+    kubeconfig: data.kubeconfig,
+    context: data.context,
+    namespace,
+    kind,
+    name: row.name
+  });
+
+  const result = await window.k8sApi.getResourceVersions(
+    data.kubeconfig, data.context, namespace, kind, row.name
+  );
+
+  console.log('[audit-ui] Fetch versions result:', result);
+
+  if (!isSameResource(data.selected, row)) {
+    console.log('[audit-ui] Fetch versions stale check failed (user switched resources)');
+    return; // stale
+  }
+  if (!result.ok) {
+    console.error('[audit-ui] Fetch versions failed with error:', result.error);
+    el.manageHistoryList.innerHTML = `<div class="manage-empty">Error: ${escHtml(result.error)}</div>`;
+    return;
+  }
+  if (result.rows.length === 0) {
+    console.log('[audit-ui] Fetch versions completed: 0 rows found');
+    el.manageHistoryList.innerHTML = '<div class="manage-empty">No audit history for this resource</div>';
+    return;
+  }
+
+  console.log(`[audit-ui] Fetch versions completed: rendering ${result.rows.length} rows`);
+  state.manage.history = result.rows;
+  renderHistoryList(result.rows, kind, namespace, row.name);
+}
+
+function renderHistoryList(rows, kind, namespace, name) {
+  const data = state.manage;
+  const crdMeta = data.mode === 'crd' ? data.activeCrd : null;
+
+  el.manageHistoryList.innerHTML = rows.map((r) => {
+    const ts = new Date(r.updated_at).toLocaleString();
+    const restoreDisabled = (!data.writeUnlocked || r.action === 'delete') ? ' disabled' : '';
+    return `<div class="manage-history-row" data-id="${r.id}">
+      <span class="manage-history-version">v${r.edit_version}</span>
+      <span class="manage-history-action ${r.action}">${r.action}</span>
+      <span class="manage-history-meta">${escHtml(r.updated_by || 'unknown')} · ${ts}</span>
+      <div class="manage-history-actions">
+        <button class="btn btn-xs btn-ghost" data-history-diff="${r.id}">Diff</button>
+        <button class="btn btn-xs btn-ghost" data-history-restore="${r.id}"${restoreDisabled}>Restore</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.manageHistoryList.querySelectorAll('[data-history-diff]').forEach((btn) => {
+    btn.addEventListener('click', () => showHistoryDiff(btn.dataset.historyDiff));
+  });
+  el.manageHistoryList.querySelectorAll('[data-history-restore]').forEach((btn) => {
+    if (!btn.disabled) {
+      btn.addEventListener('click', () => handleHistoryRestore(btn.dataset.historyRestore, kind, namespace, name, crdMeta));
+    }
+  });
+}
+
+function cleanYamlForDiff(yaml) {
+  if (!yaml) return '';
+  
+  // 1. Strip managedFields and last-applied-configuration blocks
+  const lines = yaml.split(/\r?\n/);
+  const noClutter = [];
+  let skipIndent = -1;
+  for (const line of lines) {
+    const match = line.match(/^([ \t]*)"?(managedFields|kubectl\.kubernetes\.io\/last-applied-configuration)"?:/);
+    if (match) {
+      skipIndent = match[1].length;
+      continue;
+    }
+    if (skipIndent !== -1) {
+      const indent = line.match(/^([ \t]*)/)[0].length;
+      if (line.trim() === '' || indent > skipIndent) {
+        continue;
+      }
+      skipIndent = -1;
+    }
+    noClutter.push(line);
+  }
+  let cleaned = noClutter.join('\n');
+
+  // 2. Strip system metadata fields (uid, resourceVersion, generation, creationTimestamp)
+  cleaned = cleaned.replace(/^[ \t]*(uid|resourceVersion|generation|creationTimestamp):.*\r?\n/gm, '');
+
+  // 3. Strip status section at the bottom (similar to stripManifestStatus)
+  cleaned = cleaned.replace(/\nstatus:\n(?:[ \t].*\n?)*/g, '\n');
+
+  return cleaned;
+}
+
+async function showHistoryDiff(id) {
+  const result = await window.k8sApi.getVersionYaml(id);
+  if (!result.ok) {
+    el.manageHistoryDiffOutput.textContent = `Error: ${result.error}`;
+    el.manageHistoryDiff.style.display = 'flex';
+    el.manageHistoryList.style.display = 'none';
+    return;
+  }
+
+  const row = result.row;
+  const oldYaml = cleanYamlForDiff(row.old_yaml || '');
+  const newYaml = cleanYamlForDiff(row.new_yaml || '');
+
+  let html = '';
+  if (row.action === 'delete') {
+    html = `<div class="manifest-diff-line manifest-diff-line-removed">${escHtml(oldYaml)}</div>`;
+  } else if (!oldYaml) {
+    html = `<div class="manifest-diff-line manifest-diff-line-added">${escHtml(newYaml)}</div>`;
+  } else {
+    const chunks = Diff.diffLines(oldYaml, newYaml);
+    html = chunks.map((part) => {
+      const cls = part.added ? 'manifest-diff-line-added' : part.removed ? 'manifest-diff-line-removed' : 'manifest-diff-line-same';
+      return `<div class="manifest-diff-line ${cls}">${escHtml(part.value).replace(/\n/g, '<br>')}</div>`;
+    }).join('');
+  }
+
+  el.manageHistoryDiffOutput.innerHTML = html;
+  el.manageHistoryDiff.style.display = 'flex';
+  el.manageHistoryList.style.display = 'none';
+}
+
+el.manageHistoryDiffClose.addEventListener('click', () => {
+  el.manageHistoryDiff.style.display = 'none';
+  el.manageHistoryList.style.display = '';
+});
+
+async function handleHistoryRestore(id, kind, namespace, name, crdMeta) {
+  const { ok } = await showManageConfirm({
+    title: `Restore this version?`,
+    body: `This will replace the current live resource with the selected version's YAML. The current state will be saved as a new audit entry.`,
+    confirmLabel: 'Restore',
+  });
+  if (!ok) return;
+
+  const data = state.manage;
+  const result = await window.k8sApi.restoreResourceVersion(
+    data.kubeconfig, data.context, namespace, kind, name, id,
+    crdMeta ? { group: crdMeta.group, version: crdMeta.version, plural: crdMeta.plural, namespaced: crdMeta.namespaced } : null
+  );
+
+  if (!result.ok) {
+    alert(`Restore failed: ${result.error}`);
+    return;
+  }
+
+  if (result.auditWarning) {
+    console.warn('[audit] Restore audit warning:', result.auditWarning);
+  }
+
+  refreshManageResources();
+  loadManageHistory(); // reload history to show new entry
+}
+
 /* ── Auto-update ─────────────────────────────────────────────────────────── */
 if (window.k8sApi.onUpdateAvailable) {
   window.k8sApi.onUpdateAvailable((version) => {
@@ -3613,6 +4807,8 @@ if (window.k8sApi.onUpdateAvailable) {
   el.btnInstallUpdate.addEventListener('click', () => window.k8sApi.triggerUpdate());
   el.btnDismissUpdate.addEventListener('click', () => { el.updateBanner.style.display = 'none'; });
 }
+
+el.btnDismissAuthCheck.addEventListener('click', () => { el.authCheckBanner.style.display = 'none'; });
 
 /* ── Init ────────────────────────────────────────────────────────────────── */
 checkAuth().then((ok) => {

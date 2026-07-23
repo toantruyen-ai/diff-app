@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const k8s = require('@kubernetes/client-node');
 const fs = require('fs');
+const eventsDb = require('./events-db');
+const auditDb = require('./audit-db');
 const { execSync, spawn, exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
@@ -95,6 +97,7 @@ function createWindow() {
     for (const sid of logSessions.keys()) stopLogSession(sid);
     for (const sid of execSessions.keys()) stopExecSession(sid);
     for (const sid of pfSessions.keys()) stopPortForwardSession(sid);
+    for (const sid of watchSessions.keys()) stopWatchSession(sid);
     mainWindow = null;
   });
 }
@@ -118,6 +121,28 @@ app.on('window-all-closed', () => {
 // YAML blobs through IPC on every k8s API call.
 const aksKcStore = new Map();
 let aksKcIdSeq = 0;
+
+// LRU-capped: picking clusters repeatedly (re-opening the picker, switching back and forth)
+// would otherwise grow this Map forever since entries were never evicted.
+const AKS_KC_STORE_MAX = 20;
+
+function storeAksKc(raw) {
+  const kcId = `aks:${++aksKcIdSeq}`;
+  aksKcStore.set(kcId, raw);
+  while (aksKcStore.size > AKS_KC_STORE_MAX) {
+    aksKcStore.delete(aksKcStore.keys().next().value); // oldest (insertion order)
+  }
+  return kcId;
+}
+
+// Bumps an entry to "most recently used" on read so an actively-polled cluster is never
+// evicted purely due to insertion order — only genuinely stale/abandoned entries are.
+function touchAksKc(ref) {
+  const raw = aksKcStore.get(ref);
+  aksKcStore.delete(ref);
+  aksKcStore.set(ref, raw);
+  return raw;
+}
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 
@@ -331,6 +356,15 @@ ipcMain.handle('check-kubelogin-auth', async () => {
   return { ok: true };
 });
 
+ipcMain.handle('az-logout', async () => {
+  try {
+    execSync('az logout', { encoding: 'utf8', timeout: 5000, stdio: 'pipe' });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e.stderr || e.message) };
+  }
+});
+
 ipcMain.handle('az-login', async () => {
   return new Promise((resolve) => {
     const proc = spawn('az', ['login'], { shell: true, stdio: 'pipe' });
@@ -399,8 +433,7 @@ ipcMain.handle('get-aks-credentials', async (_e, name, resourceGroup) => {
     if (!kc.getCurrentCluster()) {
       return { ok: false, error: `Kubeconfig for "${name}" has no active cluster after parsing` };
     }
-    const kcId = `aks:${++aksKcIdSeq}`;
-    aksKcStore.set(kcId, raw);
+    const kcId = storeAksKc(raw);
     return { ok: true, kubeconfigId: kcId };
   } catch (e) {
     return { ok: false, error: String(e.stderr || e.message) };
@@ -521,6 +554,29 @@ const ALL_NAMESPACES = '__all__';
 
 // These ignore whatever namespace is selected — always listed/read cluster-wide.
 const MANAGE_CLUSTER_SCOPED_KINDS = ['nodes', 'pvs', 'namespaces', 'clusterroles', 'clusterrolebindings', 'storageclasses'];
+
+// ── K8s Manage: real-time watch (Phase 16) ───────────────────────────────────
+// Only the high-churn workload-controller kinds get a real k8s watch stream — these are the
+// resources that change *during normal operational activity* (a rollout cascades through
+// Deployment → ReplicaSet → Pods; a scale changes Pod count; Events fire on every transition),
+// and where the old 5s poll delay was most noticeable. Everything else (Services, ConfigMaps,
+// Secrets, RBAC/Policy kinds, Nodes, PVs/PVCs, HPAs, CronJobs, Namespaces, and all CRDs) is
+// genuinely low-churn or not worth the added complexity yet — it stays on the existing poll
+// timer. Metrics (get-metrics) is unaffected either way — metrics-server has no watch API.
+const WATCH_ENABLED_KINDS = ['pods', 'deployments', 'replicasets', 'statefulsets', 'daemonsets', 'jobs', 'events'];
+
+// REST path builder + namespaced flag per watchable kind. k8s.Watch operates on a raw path,
+// not a typed client method, so this is expressed as a path template rather than reusing
+// listKindItems's per-method switch (which returns fully-typed list responses, not paths).
+const KIND_WATCH_META = {
+  pods:         { namespaced: true, path: (ns) => ns ? `/api/v1/namespaces/${ns}/pods` : '/api/v1/pods' },
+  events:       { namespaced: true, path: (ns) => ns ? `/api/v1/namespaces/${ns}/events` : '/api/v1/events' },
+  deployments:  { namespaced: true, path: (ns) => ns ? `/apis/apps/v1/namespaces/${ns}/deployments` : '/apis/apps/v1/deployments' },
+  replicasets:  { namespaced: true, path: (ns) => ns ? `/apis/apps/v1/namespaces/${ns}/replicasets` : '/apis/apps/v1/replicasets' },
+  statefulsets: { namespaced: true, path: (ns) => ns ? `/apis/apps/v1/namespaces/${ns}/statefulsets` : '/apis/apps/v1/statefulsets' },
+  daemonsets:   { namespaced: true, path: (ns) => ns ? `/apis/apps/v1/namespaces/${ns}/daemonsets` : '/apis/apps/v1/daemonsets' },
+  jobs:         { namespaced: true, path: (ns) => ns ? `/apis/batch/v1/namespaces/${ns}/jobs` : '/apis/batch/v1/jobs' },
+};
 
 function ageOf(ts) {
   return ts ? new Date(ts).toISOString() : null;
@@ -958,7 +1014,9 @@ async function listKindItems(apis, kind, namespace, allNs) {
     default:
       throw new Error(`Unknown resource kind: ${kind}`);
   }
-  return res.body.items || [];
+  // Full body (not just .items) — the watch-session seeder (below) also needs
+  // res.body.metadata.resourceVersion as the starting point for its watch stream.
+  return res.body;
 }
 
 ipcMain.handle('list-resource', async (_e, ref, contextName, namespace, kind) => {
@@ -966,7 +1024,7 @@ ipcMain.handle('list-resource', async (_e, ref, contextName, namespace, kind) =>
   try {
     const { apis } = getCachedApiClients(ref, contextName);
     const allNs = namespace === ALL_NAMESPACES;
-    const items = await listKindItems(apis, kind, namespace, allNs);
+    const items = (await listKindItems(apis, kind, namespace, allNs)).items || [];
     const rows = items.map((item) => projectRow(kind, item));
     return { ok: true, rows };
   } catch (e) {
@@ -979,7 +1037,10 @@ const MANAGE_SEARCH_EXCLUDE_KINDS = ['events'];
 
 // Fan-out name search across every (non-excluded) kind at once — explicitly user-triggered
 // (Enter/click in the renderer), not per-keystroke, to bound worst-case load to one burst per search.
-ipcMain.handle('search-resources', async (_e, ref, contextName, namespace, query) => {
+// `crds` (optional) is the renderer's already-fetched list-crds result — CRDs are per-cluster
+// discovered data, not a static kind table, so re-discovering them here on every search would
+// add a redundant round trip; the renderer passes what it already has cached.
+ipcMain.handle('search-resources', async (_e, ref, contextName, namespace, query, crds) => {
   try {
     const { apis } = getCachedApiClients(ref, contextName);
     const allNs = namespace === ALL_NAMESPACES;
@@ -987,7 +1048,7 @@ ipcMain.handle('search-resources', async (_e, ref, contextName, namespace, query
     const q = String(query || '').toLowerCase();
 
     const settled = await Promise.allSettled(kinds.map(async (kind) => {
-      const items = await listKindItems(apis, kind, namespace, allNs);
+      const items = (await listKindItems(apis, kind, namespace, allNs)).items || [];
       return items
         .filter((item) => (item.metadata?.name || '').toLowerCase().includes(q))
         .slice(0, 20) // cap per kind — keeps the IPC payload small
@@ -1000,11 +1061,168 @@ ipcMain.handle('search-resources', async (_e, ref, contextName, namespace, query
       if (r.status === 'fulfilled') results.push(...r.value);
       else errors.push({ kind: kinds[i], error: r.reason.message });
     });
+
+    const customApi = kc => kc.makeApiClient(k8s.CustomObjectsApi);
+    const kcForCrds = buildKubeConfig(ref, contextName);
+    const crdApi = customApi(kcForCrds);
+    const crdSettled = await Promise.allSettled((crds || []).map(async (crd) => {
+      const allNsForCrd = crd.namespaced && !allNs;
+      const res = allNsForCrd
+        ? await withTimeout(crdApi.listNamespacedCustomObject(crd.group, crd.version, namespace, crd.plural), 20000, 'Timed out listing custom resources')
+        : await withTimeout(crdApi.listClusterCustomObject(crd.group, crd.version, crd.plural), 20000, 'Timed out listing custom resources');
+      return (res.body.items || [])
+        .filter((item) => (item.metadata?.name || '').toLowerCase().includes(q))
+        .slice(0, 20)
+        .map((item) => ({
+          crd: true, group: crd.group, version: crd.version, plural: crd.plural, kind: crd.kind, namespaced: crd.namespaced,
+          crdName: crd.name,
+          name: item.metadata.name, namespace: item.metadata.namespace || '', age: ageOf(item.metadata.creationTimestamp),
+        }));
+    }));
+    crdSettled.forEach((r, i) => {
+      if (r.status === 'fulfilled') results.push(...r.value);
+      else errors.push({ kind: crds[i].kind, error: r.reason.message });
+    });
+
     return { ok: true, results, errors };
   } catch (e) {
     return { ok: false, error: e.message };
   }
 });
+
+// ── K8s Manage: real-time watch sessions (Phase 16) ──────────────────────────
+// One session per (ref, context, namespace, kind) the renderer is currently viewing, following
+// the same Map-keyed-by-session-id idiom as logSessions/execSessions/pfSessions (below): session
+// tracked in a Map, IPC events pushed over per-session channels, explicit stop, torn down on
+// mainWindow 'closed'.
+const watchSessions = new Map(); // sid -> { stopped, req, resourceVersion, backoffMs, everConnected, reconnectTimer }
+
+function stopWatchSession(sid) {
+  const session = watchSessions.get(sid);
+  if (!session) return;
+  session.stopped = true;
+  clearTimeout(session.reconnectTimer);
+  try { session.req && session.req.abort(); } catch { /* already closed */ }
+  watchSessions.delete(sid);
+}
+
+ipcMain.handle('watch-start', async (_e, ref, contextName, namespace, kind, sid) => {
+  if (!KIND_WATCH_META[kind]) return { ok: false, error: `Kind not watchable: ${kind}` };
+  stopWatchSession(sid); // idempotent restart, mirrors start-pod-logs
+  watchSessions.set(sid, {
+    stopped: false, req: null, resourceVersion: null,
+    backoffMs: 1000, everConnected: false, reconnectTimer: null,
+  });
+  seedAndWatch(sid, ref, contextName, namespace, kind);
+  return { ok: true };
+});
+
+ipcMain.handle('watch-stop', async (_e, sid) => {
+  stopWatchSession(sid);
+  return { ok: true };
+});
+
+// Initial full snapshot (LIST) to seed the table, then hands off to the live watch stream.
+// Also the reconnect entry point — on every reconnect we re-list from scratch rather than trying
+// to resume from the stored resourceVersion: a resourceVersion can go stale (410 Gone) after being
+// disconnected more than a few minutes, and reliably distinguishing "410 Gone" from a generic
+// network error across transports is itself fragile. Always-relist trades a slightly heavier
+// reconnect (one extra LIST call, only on genuine disconnects) for eliminating an entire class of
+// "missed delta after reconnect" bugs.
+async function seedAndWatch(sid, ref, contextName, namespace, kind) {
+  const session = watchSessions.get(sid);
+  if (!session || session.stopped) return;
+  const sendIfAlive = (channel, ...args) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
+  };
+  let body;
+  try {
+    const { apis } = getCachedApiClients(ref, contextName);
+    const allNs = namespace === ALL_NAMESPACES;
+    body = await listKindItems(apis, kind, namespace, allNs);
+  } catch (e) {
+    if (session.stopped) return;
+    sendIfAlive(`watch-error:${sid}`, { message: e.message, permanent: true });
+    return;
+  }
+  if (session.stopped) return; // stopped while the LIST was in flight
+  sendIfAlive(`watch-sync:${sid}`, { rows: (body.items || []).map((item) => projectRow(kind, item)) });
+  session.resourceVersion = body.metadata?.resourceVersion || null;
+  runWatchLoop(sid, ref, contextName, namespace, kind);
+}
+
+function runWatchLoop(sid, ref, contextName, namespace, kind) {
+  const session = watchSessions.get(sid);
+  if (!session || session.stopped) return;
+  const sendIfAlive = (channel, ...args) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
+  };
+
+  function scheduleReconnect() {
+    if (session.stopped || session.reconnectTimer) return; // already scheduled, or explicitly stopped
+    sendIfAlive(`watch-error:${sid}`, { message: 'Reconnecting…', permanent: false });
+    session.backoffMs = Math.min(session.backoffMs * 2, 30000);
+    session.reconnectTimer = setTimeout(() => {
+      session.reconnectTimer = null;
+      seedAndWatch(sid, ref, contextName, namespace, kind);
+    }, session.backoffMs);
+  }
+
+  const meta = KIND_WATCH_META[kind];
+  const allNs = namespace === ALL_NAMESPACES;
+  const path = meta.path(meta.namespaced && !allNs ? namespace : null);
+
+  let kc;
+  try {
+    kc = buildKubeConfig(ref, contextName);
+  } catch (e) {
+    if (!session.everConnected) { sendIfAlive(`watch-error:${sid}`, { message: e.message, permanent: true }); return; }
+    scheduleReconnect();
+    return;
+  }
+  const watch = new k8s.Watch(kc);
+
+  watch.watch(path, { resourceVersion: session.resourceVersion, allowWatchBookmarks: true }, (phase, apiObj) => {
+    if (session.stopped) return;
+    // Any message at all — including a structured ERROR event — proves the watch endpoint is
+    // reachable and the `watch` verb is permitted, so this is never treated as a permanent failure.
+    session.everConnected = true;
+    if (phase === 'ERROR') {
+      // Typically a 410 Gone (resourceVersion too old to resume from) — abort and relist.
+      try { session.req && session.req.abort(); } catch { /* already closing */ }
+      scheduleReconnect();
+      return;
+    }
+    if (phase === 'BOOKMARK') {
+      session.resourceVersion = apiObj.metadata?.resourceVersion || session.resourceVersion;
+      return;
+    }
+    session.backoffMs = 1000;
+    session.resourceVersion = apiObj.metadata?.resourceVersion || session.resourceVersion;
+    sendIfAlive(`watch-event:${sid}`, { type: phase, row: projectRow(kind, apiObj) });
+  }, (err) => {
+    // Fires on any close: server-side timeout, network blip, or our own explicit abort().
+    if (session.stopped) return;
+    if (!session.everConnected) {
+      // Never received a single event/bookmark on this session — most likely the `watch` verb is
+      // RBAC-denied (list/get can be allowed independently of watch) or unsupported here. Don't
+      // retry against something that can't be watched at all; the renderer falls back to polling.
+      sendIfAlive(`watch-error:${sid}`, { message: err ? err.message : 'Watch closed', permanent: true });
+      return;
+    }
+    scheduleReconnect();
+  }).then((req) => {
+    if (session.stopped) { try { req.abort(); } catch { /* already closing */ } return; }
+    session.req = req;
+  }).catch((e) => {
+    if (session.stopped) return;
+    if (!session.everConnected) {
+      sendIfAlive(`watch-error:${sid}`, { message: e.message, permanent: true });
+      return;
+    }
+    scheduleReconnect();
+  });
+}
 
 // Cluster-wide health digest for the Overview landing page — a handful of targeted calls
 // (not a fan-out over all 17+ kinds), ignores the namespace selector by design.
@@ -1215,11 +1433,20 @@ ipcMain.handle('get-resource-yaml', async (_e, ref, contextName, namespace, kind
     let obj = res.body;
     if (obj.metadata) {
       delete obj.metadata.managedFields;
+      delete obj.metadata.uid;
+      delete obj.metadata.creationTimestamp;
       delete obj.metadata.resourceVersion;
+      if (obj.metadata.annotations) {
+        delete obj.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];
+      }
     }
+    delete obj.status;
     const redacted = kind === 'secrets' && !(opts && opts.reveal);
     if (redacted) obj = redactSecretData(obj);
-    return { ok: true, yaml: k8s.dumpYaml(obj), redacted };
+    // Editing a redacted Secret would silently write "***REDACTED***" over the real values —
+    // block edit mode client-side until Reveal is on (apply-resource-yaml also guards server-side).
+    const editable = !(kind === 'secrets' && redacted);
+    return { ok: true, yaml: k8s.dumpYaml(obj), redacted, editable };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -1231,13 +1458,12 @@ ipcMain.handle('get-resource-events', async (_e, ref, contextName, namespace, ki
     const kc = buildKubeConfig(ref, contextName);
     const coreApi = kc.makeApiClient(k8s.CoreV1Api);
     const fieldSelector = `involvedObject.name=${name},involvedObject.kind=${MANAGE_KIND_LABEL[kind]}`;
-    // Cluster-scoped kinds' Events live in a namespace (usually "default") that may differ from
-    // whatever namespace is selected in the UI — search across all namespaces instead.
     const res = MANAGE_CLUSTER_SCOPED_KINDS.includes(kind)
       ? await withTimeout(coreApi.listEventForAllNamespaces(undefined, undefined, fieldSelector), 20000, 'Timed out listing events')
       : await withTimeout(coreApi.listNamespacedEvent(namespace, undefined, undefined, undefined, fieldSelector), 20000, 'Timed out listing events');
     const rows = (res.body.items || [])
       .map((item) => ({
+        uid: item.metadata?.uid || '',
         type: item.type || '',
         reason: item.reason || '',
         message: item.message || '',
@@ -1245,7 +1471,7 @@ ipcMain.handle('get-resource-events', async (_e, ref, contextName, namespace, ki
         _ts: item.lastTimestamp || item.eventTime || item.metadata?.creationTimestamp,
       }))
       .sort((a, b) => new Date(b._ts || 0) - new Date(a._ts || 0))
-      .map(({ _ts, ...rest }) => ({ ...rest, age: ageOf(_ts) }));
+      .map((item) => ({ ...item, age: ageOf(item._ts) }));
     return { ok: true, rows };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1253,7 +1479,24 @@ ipcMain.handle('get-resource-events', async (_e, ref, contextName, namespace, ki
 });
 
 // "can-i" check: fires a SelfSubjectAccessReview per verb so the drawer can show what the
-// current identity is actually allowed to do — kind-agnostic, works for any MANAGE_KIND_GVR entry.
+// current identity is actually allowed to do — kind-agnostic, shared by both the built-in-kind
+// path (check-access, using MANAGE_KIND_GVR) and the CRD path (check-custom-resource-access,
+// using the CRD's own discovered group/plural).
+async function runAccessCheck(authApi, { namespace, namespaced, group, resource, name }) {
+  const results = await Promise.allSettled(MANAGE_ACCESS_VERBS.map((verb) =>
+    withTimeout(
+      authApi.createSelfSubjectAccessReview({
+        spec: { resourceAttributes: { namespace: namespaced ? namespace : undefined, verb, group, resource, name } },
+      }),
+      10000,
+      `Timed out checking ${verb}`
+    )
+  ));
+  return results.map((r, i) => r.status === 'fulfilled'
+    ? { verb: MANAGE_ACCESS_VERBS[i], allowed: !!r.value.body.status.allowed, reason: r.value.body.status.reason || '' }
+    : { verb: MANAGE_ACCESS_VERBS[i], allowed: false, reason: r.reason.message });
+}
+
 ipcMain.handle('check-access', async (_e, ref, contextName, namespace, kind, name) => {
   const gvr = MANAGE_KIND_GVR[kind];
   if (!gvr) return { ok: false, error: `Unknown resource kind: ${kind}` };
@@ -1261,18 +1504,20 @@ ipcMain.handle('check-access', async (_e, ref, contextName, namespace, kind, nam
     const kc = buildKubeConfig(ref, contextName);
     const authApi = kc.makeApiClient(k8s.AuthorizationV1Api);
     const namespaced = !MANAGE_CLUSTER_SCOPED_KINDS.includes(kind);
-    const results = await Promise.allSettled(MANAGE_ACCESS_VERBS.map((verb) =>
-      withTimeout(
-        authApi.createSelfSubjectAccessReview({
-          spec: { resourceAttributes: { namespace: namespaced ? namespace : undefined, verb, group: gvr.group, resource: gvr.resource, name } },
-        }),
-        10000,
-        `Timed out checking ${verb}`
-      )
-    ));
-    const rows = results.map((r, i) => r.status === 'fulfilled'
-      ? { verb: MANAGE_ACCESS_VERBS[i], allowed: !!r.value.body.status.allowed, reason: r.value.body.status.reason || '' }
-      : { verb: MANAGE_ACCESS_VERBS[i], allowed: false, reason: r.reason.message });
+    const rows = await runAccessCheck(authApi, { namespace, namespaced, group: gvr.group, resource: gvr.resource, name });
+    return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// CRD counterpart of check-access — the CRD's group/plural is already known to the renderer
+// from list-crds, so no MANAGE_KIND_GVR lookup is needed here.
+ipcMain.handle('check-custom-resource-access', async (_e, ref, contextName, namespace, group, resource, namespaced, name) => {
+  try {
+    const kc = buildKubeConfig(ref, contextName);
+    const authApi = kc.makeApiClient(k8s.AuthorizationV1Api);
+    const rows = await runAccessCheck(authApi, { namespace, namespaced, group, resource, name });
     return { ok: true, rows };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1300,6 +1545,14 @@ ipcMain.handle('resource-action', async (_e, ref, contextName, namespace, kind, 
 
     switch (action) {
       case 'delete': {
+        // ── Audit: capture old snapshot before delete ──
+        let oldObj = null;
+        let auditEditVersion = 0;
+        if (auditDb.status().connected) {
+          try { oldObj = await readManageObject(ref, contextName, namespace, kind, name); } catch { /* best-effort */ }
+          auditEditVersion = parseInt(oldObj?.metadata?.annotations?.['k8senvdiff-edit-resource-version'] || '0', 10);
+        }
+
         switch (kind) {
           case 'pods':         await coreApi.deleteNamespacedPod(name, namespace); break;
           case 'deployments':  await appsApi.deleteNamespacedDeployment(name, namespace); break;
@@ -1328,6 +1581,14 @@ ipcMain.handle('resource-action', async (_e, ref, contextName, namespace, kind, 
           case 'resourcequotas':       await coreApi.deleteNamespacedResourceQuota(name, namespace); break;
           case 'limitranges':          await coreApi.deleteNamespacedLimitRange(name, namespace); break;
           default: return { ok: false, error: `Delete not supported for kind: ${kind}` };
+        }
+
+        // ── Audit: record after delete ──
+        if (auditDb.status().connected && oldObj) {
+          await recordAudit({
+            ref, contextName, namespace, kind, name, action: 'delete',
+            oldObj, newObj: null, editVersion: auditEditVersion,
+          });
         }
         break;
       }
@@ -1366,6 +1627,426 @@ ipcMain.handle('resource-action', async (_e, ref, contextName, namespace, kind, 
     }
     return { ok: true };
   } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── K8s Manage: YAML edit & apply ─────────────────────────────────────────────
+// Full-object replace (PUT), not patch — the resourceVersion the renderer fetched with
+// opts.forEdit gives free optimistic-concurrency (409 on conflict), which a merge-patch
+// would not. Edit-existing only: kind/name/namespace must match what the tab was opened
+// for, so this can never create a new resource or silently overwrite an unrelated one.
+ipcMain.handle('apply-resource-yaml', async (_e, ref, contextName, namespace, kind, name, yamlText, resourceVersion) => {
+  if (!MANAGE_KINDS.includes(kind)) return { ok: false, error: `Unknown resource kind: ${kind}`, kind: 'validation' };
+  let parsed;
+  try {
+    parsed = k8s.loadYaml(yamlText);
+  } catch (e) {
+    return { ok: false, error: `YAML parse error: ${e.message}`, kind: 'parse' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, error: 'Expected a single YAML object/document', kind: 'parse' };
+  }
+  if (parsed.kind !== MANAGE_KIND_LABEL[kind]) {
+    return { ok: false, error: `Expected kind "${MANAGE_KIND_LABEL[kind]}", got "${parsed.kind}"`, kind: 'validation' };
+  }
+  if (parsed.metadata?.name !== name) {
+    return { ok: false, error: `metadata.name ("${parsed.metadata?.name}") must match "${name}"`, kind: 'validation' };
+  }
+  const namespaced = !MANAGE_CLUSTER_SCOPED_KINDS.includes(kind);
+  if (namespaced && parsed.metadata?.namespace && parsed.metadata.namespace !== namespace) {
+    return { ok: false, error: `metadata.namespace ("${parsed.metadata.namespace}") must match "${namespace}"`, kind: 'validation' };
+  }
+  const rv = resourceVersion || parsed.metadata?.resourceVersion;
+  if (!rv) {
+    return { ok: false, error: 'Missing metadata.resourceVersion — reload the YAML and try again.', kind: 'validation' };
+  }
+  if (!parsed.metadata) parsed.metadata = {};
+  parsed.metadata.resourceVersion = rv;
+  if (kind === 'secrets' && parsed.data && Object.values(parsed.data).some((v) => v === '***REDACTED***')) {
+    return { ok: false, error: 'This YAML still contains redacted placeholder values. Enable "Reveal secret values", reload, then edit.', kind: 'validation' };
+  }
+
+  try {
+    const kc = buildKubeConfig(ref, contextName);
+    const coreApi = kc.makeApiClient(k8s.CoreV1Api);
+    const appsApi = kc.makeApiClient(k8s.AppsV1Api);
+    const batchApi = kc.makeApiClient(k8s.BatchV1Api);
+    const networkingApi = kc.makeApiClient(k8s.NetworkingV1Api);
+    const autoscalingApi = kc.makeApiClient(k8s.AutoscalingV2Api);
+    const rbacApi = kc.makeApiClient(k8s.RbacAuthorizationV1Api);
+    const storageApi = kc.makeApiClient(k8s.StorageV1Api);
+
+    // ── Audit: capture old snapshot + bump annotation ──
+    let oldObj = null;
+    let editVersion = 0;
+    if (auditDb.status().connected) {
+      try { oldObj = await readManageObject(ref, contextName, namespace, kind, name); } catch { /* best-effort */ }
+      const clusterId = auditDb.getClusterId(ref, contextName);
+      const dbNext = await auditDb.nextEditVersion({ clusterId, namespace, kind, name });
+      const currentAnno = parseInt(oldObj?.metadata?.annotations?.['k8senvdiff-edit-resource-version'] || '0', 10);
+      editVersion = Math.max(dbNext, currentAnno + 1);
+      if (!parsed.metadata.annotations) parsed.metadata.annotations = {};
+      parsed.metadata.annotations['k8senvdiff-edit-resource-version'] = String(editVersion);
+    }
+
+    let res;
+    switch (kind) {
+      case 'pods':         res = await withTimeout(coreApi.replaceNamespacedPod(name, namespace, parsed), 20000, 'Timed out applying pod'); break;
+      case 'deployments':  res = await withTimeout(appsApi.replaceNamespacedDeployment(name, namespace, parsed), 20000, 'Timed out applying deployment'); break;
+      case 'statefulsets': res = await withTimeout(appsApi.replaceNamespacedStatefulSet(name, namespace, parsed), 20000, 'Timed out applying statefulset'); break;
+      case 'daemonsets':   res = await withTimeout(appsApi.replaceNamespacedDaemonSet(name, namespace, parsed), 20000, 'Timed out applying daemonset'); break;
+      case 'replicasets':  res = await withTimeout(appsApi.replaceNamespacedReplicaSet(name, namespace, parsed), 20000, 'Timed out applying replicaset'); break;
+      case 'services':     res = await withTimeout(coreApi.replaceNamespacedService(name, namespace, parsed), 20000, 'Timed out applying service'); break;
+      case 'ingresses':    res = await withTimeout(networkingApi.replaceNamespacedIngress(name, namespace, parsed), 20000, 'Timed out applying ingress'); break;
+      case 'configmaps':   res = await withTimeout(coreApi.replaceNamespacedConfigMap(name, namespace, parsed), 20000, 'Timed out applying configmap'); break;
+      case 'secrets':      res = await withTimeout(coreApi.replaceNamespacedSecret(name, namespace, parsed), 20000, 'Timed out applying secret'); break;
+      case 'jobs':         res = await withTimeout(batchApi.replaceNamespacedJob(name, namespace, parsed), 20000, 'Timed out applying job'); break;
+      case 'cronjobs':     res = await withTimeout(batchApi.replaceNamespacedCronJob(name, namespace, parsed), 20000, 'Timed out applying cronjob'); break;
+      case 'pvcs':         res = await withTimeout(coreApi.replaceNamespacedPersistentVolumeClaim(name, namespace, parsed), 20000, 'Timed out applying PVC'); break;
+      case 'hpas':         res = await withTimeout(autoscalingApi.replaceNamespacedHorizontalPodAutoscaler(name, namespace, parsed), 20000, 'Timed out applying HPA'); break;
+      case 'nodes':        res = await withTimeout(coreApi.replaceNode(name, parsed), 20000, 'Timed out applying node'); break;
+      case 'pvs':          res = await withTimeout(coreApi.replacePersistentVolume(name, parsed), 20000, 'Timed out applying PV'); break;
+      case 'namespaces':   res = await withTimeout(coreApi.replaceNamespace(name, parsed), 20000, 'Timed out applying namespace'); break;
+      case 'events':       res = await withTimeout(coreApi.replaceNamespacedEvent(name, namespace, parsed), 20000, 'Timed out applying event'); break;
+      case 'serviceaccounts':     res = await withTimeout(coreApi.replaceNamespacedServiceAccount(name, namespace, parsed), 20000, 'Timed out applying service account'); break;
+      case 'roles':               res = await withTimeout(rbacApi.replaceNamespacedRole(name, namespace, parsed), 20000, 'Timed out applying role'); break;
+      case 'rolebindings':        res = await withTimeout(rbacApi.replaceNamespacedRoleBinding(name, namespace, parsed), 20000, 'Timed out applying role binding'); break;
+      case 'clusterroles':        res = await withTimeout(rbacApi.replaceClusterRole(name, parsed), 20000, 'Timed out applying cluster role'); break;
+      case 'clusterrolebindings': res = await withTimeout(rbacApi.replaceClusterRoleBinding(name, parsed), 20000, 'Timed out applying cluster role binding'); break;
+      case 'networkpolicies':    res = await withTimeout(networkingApi.replaceNamespacedNetworkPolicy(name, namespace, parsed), 20000, 'Timed out applying network policy'); break;
+      case 'storageclasses':     res = await withTimeout(storageApi.replaceStorageClass(name, parsed), 20000, 'Timed out applying storage class'); break;
+      case 'resourcequotas':     res = await withTimeout(coreApi.replaceNamespacedResourceQuota(name, namespace, parsed), 20000, 'Timed out applying resource quota'); break;
+      case 'limitranges':        res = await withTimeout(coreApi.replaceNamespacedLimitRange(name, namespace, parsed), 20000, 'Timed out applying limit range'); break;
+    }
+
+    let obj = res.body;
+    if (obj.metadata) delete obj.metadata.managedFields; // keep resourceVersion — needed for the next edit
+    const redacted = kind === 'secrets';
+
+    // ── Audit: record after success ──
+    let auditWarning = null;
+    if (auditDb.status().connected) {
+      auditWarning = await recordAudit({
+        ref, contextName, namespace, kind, name, action: 'edit',
+        oldObj, newObj: res.body, editVersion,
+      });
+    }
+
+    return { ok: true, yaml: k8s.dumpYaml(redacted ? redactSecretData(obj) : obj), auditWarning };
+  } catch (e) {
+    if (e.statusCode === 409) {
+      return { ok: false, error: 'This resource changed on the cluster since you loaded it. Reload the YAML and re-apply your edit.', kind: 'conflict' };
+    }
+    if (e.statusCode === 403) {
+      return { ok: false, error: e.body?.message || e.message, kind: 'forbidden' };
+    }
+    if (e.statusCode === 400 || e.statusCode === 422) {
+      return { ok: false, error: e.body?.message || e.message, kind: 'invalid' };
+    }
+    return { ok: false, error: e.message, kind: 'error' };
+  }
+});
+
+// CRD counterpart of apply-resource-yaml — same validation shape, dispatched via CustomObjectsApi's
+// replaceNamespacedCustomObject/replaceClusterCustomObject instead of a per-kind switch.
+ipcMain.handle('apply-custom-resource-yaml', async (_e, ref, contextName, namespace, group, version, plural, name, namespaced, yamlText, resourceVersion) => {
+  let parsed;
+  try {
+    parsed = k8s.loadYaml(yamlText);
+  } catch (e) {
+    return { ok: false, error: `YAML parse error: ${e.message}`, kind: 'parse' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, error: 'Expected a single YAML object/document', kind: 'parse' };
+  }
+  if (parsed.metadata?.name !== name) {
+    return { ok: false, error: `metadata.name must match "${name}"`, kind: 'validation' };
+  }
+  if (namespaced && parsed.metadata?.namespace && parsed.metadata.namespace !== namespace) {
+    return { ok: false, error: `metadata.namespace must match "${namespace}"`, kind: 'validation' };
+  }
+  const rv = resourceVersion || parsed.metadata?.resourceVersion;
+  if (!rv) {
+    return { ok: false, error: 'Missing metadata.resourceVersion — reload and try again.', kind: 'validation' };
+  }
+  if (!parsed.metadata) parsed.metadata = {};
+  parsed.metadata.resourceVersion = rv;
+  try {
+    const kc = buildKubeConfig(ref, contextName);
+    const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+
+    // ── Audit: capture old CRD snapshot + bump annotation ──
+    let oldObj = null;
+    let editVersion = 0;
+    const crdKind = parsed.kind || plural;
+    if (auditDb.status().connected) {
+      try {
+        const oldRes = namespaced
+          ? await customApi.getNamespacedCustomObject(group, version, namespace, plural, name)
+          : await customApi.getClusterCustomObject(group, version, plural, name);
+        oldObj = oldRes.body;
+      } catch { /* best-effort */ }
+      const clusterId = auditDb.getClusterId(ref, contextName);
+      const dbNext = await auditDb.nextEditVersion({ clusterId, namespace, kind: crdKind, name });
+      const currentAnno = parseInt(oldObj?.metadata?.annotations?.['k8senvdiff-edit-resource-version'] || '0', 10);
+      editVersion = Math.max(dbNext, currentAnno + 1);
+      if (!parsed.metadata.annotations) parsed.metadata.annotations = {};
+      parsed.metadata.annotations['k8senvdiff-edit-resource-version'] = String(editVersion);
+    }
+
+    const res = namespaced
+      ? await withTimeout(customApi.replaceNamespacedCustomObject(group, version, namespace, plural, name, parsed), 20000, 'Timed out applying custom resource')
+      : await withTimeout(customApi.replaceClusterCustomObject(group, version, plural, name, parsed), 20000, 'Timed out applying custom resource');
+    const obj = res.body;
+    if (obj.metadata) delete obj.metadata.managedFields;
+
+    // ── Audit: record after success ──
+    let auditWarning = null;
+    if (auditDb.status().connected) {
+      auditWarning = await recordAudit({
+        ref, contextName, namespace, kind: crdKind, name, action: 'edit',
+        oldObj, newObj: res.body, editVersion,
+      });
+    }
+
+    return { ok: true, yaml: k8s.dumpYaml(obj), auditWarning };
+  } catch (e) {
+    if (e.statusCode === 409) return { ok: false, error: 'This custom resource changed since you loaded it. Reload and re-apply.', kind: 'conflict' };
+    if (e.statusCode === 403) return { ok: false, error: e.body?.message || e.message, kind: 'forbidden' };
+    if (e.statusCode === 400 || e.statusCode === 422) return { ok: false, error: e.body?.message || e.message, kind: 'invalid' };
+    return { ok: false, error: e.message, kind: 'error' };
+  }
+});
+
+// ── K8s Manage: Audit helpers ─────────────────────────────────────────────────
+
+// Shared helper to read a live manage object by kind — reuses the same per-kind dispatch
+// from get-resource-yaml but returns the raw body (no managedFields strip, no redaction).
+async function readManageObject(ref, contextName, namespace, kind, name) {
+  const kc = buildKubeConfig(ref, contextName);
+  const coreApi = kc.makeApiClient(k8s.CoreV1Api);
+  const appsApi = kc.makeApiClient(k8s.AppsV1Api);
+  const batchApi = kc.makeApiClient(k8s.BatchV1Api);
+  const networkingApi = kc.makeApiClient(k8s.NetworkingV1Api);
+  const autoscalingApi = kc.makeApiClient(k8s.AutoscalingV2Api);
+  const rbacApi = kc.makeApiClient(k8s.RbacAuthorizationV1Api);
+  const storageApi = kc.makeApiClient(k8s.StorageV1Api);
+
+  let res;
+  switch (kind) {
+    case 'pods':         res = await coreApi.readNamespacedPod(name, namespace); break;
+    case 'deployments':  res = await appsApi.readNamespacedDeployment(name, namespace); break;
+    case 'statefulsets': res = await appsApi.readNamespacedStatefulSet(name, namespace); break;
+    case 'daemonsets':   res = await appsApi.readNamespacedDaemonSet(name, namespace); break;
+    case 'replicasets':  res = await appsApi.readNamespacedReplicaSet(name, namespace); break;
+    case 'services':     res = await coreApi.readNamespacedService(name, namespace); break;
+    case 'ingresses':    res = await networkingApi.readNamespacedIngress(name, namespace); break;
+    case 'configmaps':   res = await coreApi.readNamespacedConfigMap(name, namespace); break;
+    case 'secrets':      res = await coreApi.readNamespacedSecret(name, namespace); break;
+    case 'jobs':         res = await batchApi.readNamespacedJob(name, namespace); break;
+    case 'cronjobs':     res = await batchApi.readNamespacedCronJob(name, namespace); break;
+    case 'pvcs':         res = await coreApi.readNamespacedPersistentVolumeClaim(name, namespace); break;
+    case 'hpas':         res = await autoscalingApi.readNamespacedHorizontalPodAutoscaler(name, namespace); break;
+    case 'nodes':        res = await coreApi.readNode(name); break;
+    case 'pvs':          res = await coreApi.readPersistentVolume(name); break;
+    case 'namespaces':   res = await coreApi.readNamespace(name); break;
+    case 'events':       res = await coreApi.readNamespacedEvent(name, namespace); break;
+    case 'serviceaccounts':     res = await coreApi.readNamespacedServiceAccount(name, namespace); break;
+    case 'roles':               res = await rbacApi.readNamespacedRole(name, namespace); break;
+    case 'rolebindings':        res = await rbacApi.readNamespacedRoleBinding(name, namespace); break;
+    case 'clusterroles':        res = await rbacApi.readClusterRole(name); break;
+    case 'clusterrolebindings': res = await rbacApi.readClusterRoleBinding(name); break;
+    case 'networkpolicies':    res = await networkingApi.readNamespacedNetworkPolicy(name, namespace); break;
+    case 'storageclasses':     res = await storageApi.readStorageClass(name); break;
+    case 'resourcequotas':     res = await coreApi.readNamespacedResourceQuota(name, namespace); break;
+    case 'limitranges':        res = await coreApi.readNamespacedLimitRange(name, namespace); break;
+    default: return null;
+  }
+  return res.body;
+}
+
+// Best-effort audit recording — never throws, returns warning string on failure.
+async function recordAudit({ ref, contextName, namespace, kind, name, action, oldObj, newObj, editVersion }) {
+  try {
+    const clusterId = auditDb.getClusterId(ref, contextName);
+    const updatedBy = auditDb.getAzureIdentity();
+    const oldYaml = oldObj ? k8s.dumpYaml(kind === 'secrets' ? redactSecretData(oldObj) : oldObj) : null;
+    const newYaml = newObj ? k8s.dumpYaml(kind === 'secrets' ? redactSecretData(newObj) : newObj) : null;
+    const k8sResourceVersion = (newObj || oldObj)?.metadata?.resourceVersion || '';
+    await auditDb.insertAudit({
+      clusterId,
+      namespace: namespace || '',
+      kind,
+      name,
+      action,
+      editVersion: editVersion || 0,
+      k8sResourceVersion,
+      oldYaml,
+      newYaml,
+      updatedBy,
+    });
+    return null; // no warning
+  } catch (e) {
+    console.error('[audit] Failed to record audit:', e.message);
+    return `Audit recording failed: ${e.message}`;
+  }
+}
+
+// ── K8s Manage: Audit IPC handlers ────────────────────────────────────────────
+
+ipcMain.handle('audit-db-discover', async () => {
+  return auditDb.discover();
+});
+
+ipcMain.handle('audit-db-connect', async (_e, user, password) => {
+  // Always auto-discover server from Azure tags
+  let disc = auditDb.status();
+  if (!disc.server) {
+    const discResult = await auditDb.discover();
+    if (!discResult.ok) return { ok: false, error: 'No Azure SQL server found with tag aks-database-backup=k8s-env-diff' };
+    disc = { server: discResult.server, database: discResult.database };
+  }
+  const result = await auditDb.connect({ server: disc.server, database: disc.database, user, password });
+  if (result.ok) {
+    return { ok: true, server: disc.server, database: disc.database };
+  }
+  return result;
+});
+
+ipcMain.handle('audit-db-disconnect', async () => {
+  await auditDb.close();
+  return { ok: true };
+});
+
+ipcMain.handle('audit-db-status', async () => {
+  return auditDb.status();
+});
+
+ipcMain.handle('get-resource-versions', async (_e, ref, contextName, namespace, kind, name) => {
+  console.log('[main-ipc] get-resource-versions called:', { ref, contextName, namespace, kind, name });
+  try {
+    const clusterId = auditDb.getClusterId(ref, contextName);
+    console.log('[main-ipc] Computed clusterId:', clusterId);
+    const rows = await auditDb.getVersions({ clusterId, namespace, kind, name });
+    console.log('[main-ipc] getVersions returned rows count:', rows ? rows.length : 0);
+    return { ok: true, rows };
+  } catch (e) {
+    console.error('[main-ipc] Error in get-resource-versions:', e);
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-version-yaml', async (_e, id) => {
+  try {
+    const row = await auditDb.getVersionYaml(id);
+    if (!row) return { ok: false, error: 'Version not found' };
+    return { ok: true, row };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('restore-resource-version', async (_e, ref, contextName, namespace, kind, name, id, crdMeta) => {
+  if (!auditDb.status().connected) return { ok: false, error: 'Audit DB not connected', kind: 'forbidden' };
+  try {
+    // 1. Fetch the target version's YAML
+    const versionRow = await auditDb.getVersionYaml(id);
+    if (!versionRow) return { ok: false, error: 'Version not found' };
+    const targetYaml = versionRow.new_yaml || versionRow.old_yaml;
+    if (!targetYaml) return { ok: false, error: 'No YAML data in this version' };
+
+    // 2. Parse and get live object's resourceVersion for optimistic concurrency
+    const parsed = k8s.loadYaml(targetYaml);
+    if (!parsed || typeof parsed !== 'object') return { ok: false, error: 'Invalid YAML in version', kind: 'parse' };
+
+    let liveObj;
+    if (crdMeta) {
+      const kc = buildKubeConfig(ref, contextName);
+      const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+      const res = crdMeta.namespaced
+        ? await customApi.getNamespacedCustomObject(crdMeta.group, crdMeta.version, namespace, crdMeta.plural, name)
+        : await customApi.getClusterCustomObject(crdMeta.group, crdMeta.version, crdMeta.plural, name);
+      liveObj = res.body;
+    } else {
+      liveObj = await readManageObject(ref, contextName, namespace, kind, name);
+    }
+    if (!liveObj) return { ok: false, error: 'Cannot read current resource' };
+
+    // 3. Set the live resourceVersion on the parsed YAML
+    if (!parsed.metadata) parsed.metadata = {};
+    parsed.metadata.resourceVersion = liveObj.metadata.resourceVersion;
+
+    // 4. Bump audit annotation
+    const clusterId = auditDb.getClusterId(ref, contextName);
+    const dbNext = await auditDb.nextEditVersion({ clusterId, namespace, kind, name });
+    const currentAnno = parseInt(liveObj.metadata?.annotations?.['k8senvdiff-edit-resource-version'] || '0', 10);
+    const next = Math.max(dbNext, currentAnno + 1);
+    if (!parsed.metadata.annotations) parsed.metadata.annotations = {};
+    parsed.metadata.annotations['k8senvdiff-edit-resource-version'] = String(next);
+
+    // 5. Apply (replace)
+    let newObj;
+    if (crdMeta) {
+      const kc = buildKubeConfig(ref, contextName);
+      const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+      const res = crdMeta.namespaced
+        ? await customApi.replaceNamespacedCustomObject(crdMeta.group, crdMeta.version, namespace, crdMeta.plural, name, parsed)
+        : await customApi.replaceClusterCustomObject(crdMeta.group, crdMeta.version, crdMeta.plural, name, parsed);
+      newObj = res.body;
+    } else {
+      // Re-use the same replace dispatch as apply-resource-yaml
+      const kc = buildKubeConfig(ref, contextName);
+      const coreApi = kc.makeApiClient(k8s.CoreV1Api);
+      const appsApi = kc.makeApiClient(k8s.AppsV1Api);
+      const batchApi = kc.makeApiClient(k8s.BatchV1Api);
+      const networkingApi = kc.makeApiClient(k8s.NetworkingV1Api);
+      const autoscalingApi = kc.makeApiClient(k8s.AutoscalingV2Api);
+      const rbacApi = kc.makeApiClient(k8s.RbacAuthorizationV1Api);
+      const storageApi = kc.makeApiClient(k8s.StorageV1Api);
+      let res;
+      switch (kind) {
+        case 'pods':         res = await coreApi.replaceNamespacedPod(name, namespace, parsed); break;
+        case 'deployments':  res = await appsApi.replaceNamespacedDeployment(name, namespace, parsed); break;
+        case 'statefulsets': res = await appsApi.replaceNamespacedStatefulSet(name, namespace, parsed); break;
+        case 'daemonsets':   res = await appsApi.replaceNamespacedDaemonSet(name, namespace, parsed); break;
+        case 'replicasets':  res = await appsApi.replaceNamespacedReplicaSet(name, namespace, parsed); break;
+        case 'services':     res = await coreApi.replaceNamespacedService(name, namespace, parsed); break;
+        case 'ingresses':    res = await networkingApi.replaceNamespacedIngress(name, namespace, parsed); break;
+        case 'configmaps':   res = await coreApi.replaceNamespacedConfigMap(name, namespace, parsed); break;
+        case 'secrets':      res = await coreApi.replaceNamespacedSecret(name, namespace, parsed); break;
+        case 'jobs':         res = await batchApi.replaceNamespacedJob(name, namespace, parsed); break;
+        case 'cronjobs':     res = await batchApi.replaceNamespacedCronJob(name, namespace, parsed); break;
+        case 'pvcs':         res = await coreApi.replaceNamespacedPersistentVolumeClaim(name, namespace, parsed); break;
+        case 'hpas':         res = await autoscalingApi.replaceNamespacedHorizontalPodAutoscaler(name, namespace, parsed); break;
+        case 'nodes':        res = await coreApi.replaceNode(name, parsed); break;
+        case 'pvs':          res = await coreApi.replacePersistentVolume(name, parsed); break;
+        case 'namespaces':   res = await coreApi.replaceNamespace(name, parsed); break;
+        case 'events':       res = await coreApi.replaceNamespacedEvent(name, namespace, parsed); break;
+        case 'serviceaccounts':     res = await coreApi.replaceNamespacedServiceAccount(name, namespace, parsed); break;
+        case 'roles':               res = await rbacApi.replaceNamespacedRole(name, namespace, parsed); break;
+        case 'rolebindings':        res = await rbacApi.replaceNamespacedRoleBinding(name, namespace, parsed); break;
+        case 'clusterroles':        res = await rbacApi.replaceClusterRole(name, parsed); break;
+        case 'clusterrolebindings': res = await rbacApi.replaceClusterRoleBinding(name, parsed); break;
+        case 'networkpolicies':    res = await networkingApi.replaceNamespacedNetworkPolicy(name, namespace, parsed); break;
+        case 'storageclasses':     res = await storageApi.replaceStorageClass(name, parsed); break;
+        case 'resourcequotas':     res = await coreApi.replaceNamespacedResourceQuota(name, namespace, parsed); break;
+        case 'limitranges':        res = await coreApi.replaceNamespacedLimitRange(name, namespace, parsed); break;
+        default: return { ok: false, error: `Restore not supported for kind: ${kind}` };
+      }
+      newObj = res.body;
+    }
+
+    // 6. Record audit
+    const auditWarning = await recordAudit({
+      ref, contextName, namespace, kind, name, action: 'restore',
+      oldObj: liveObj, newObj, editVersion: next,
+    });
+
+    return { ok: true, auditWarning };
+  } catch (e) {
+    if (e.statusCode === 409) return { ok: false, error: 'Resource changed since load — reload and retry.', kind: 'conflict' };
+    if (e.statusCode === 403) return { ok: false, error: e.body?.message || e.message, kind: 'forbidden' };
     return { ok: false, error: e.message };
   }
 });
@@ -1420,7 +2101,7 @@ ipcMain.handle('list-custom-resource', async (_e, ref, contextName, namespace, g
   }
 });
 
-ipcMain.handle('get-custom-resource-yaml', async (_e, ref, contextName, namespace, group, version, plural, name, namespaced) => {
+ipcMain.handle('get-custom-resource-yaml', async (_e, ref, contextName, namespace, group, version, plural, name, namespaced, opts) => {
   try {
     const kc = buildKubeConfig(ref, contextName);
     const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
@@ -1430,9 +2111,15 @@ ipcMain.handle('get-custom-resource-yaml', async (_e, ref, contextName, namespac
     const obj = res.body;
     if (obj.metadata) {
       delete obj.metadata.managedFields;
+      delete obj.metadata.uid;
+      delete obj.metadata.creationTimestamp;
       delete obj.metadata.resourceVersion;
+      if (obj.metadata.annotations) {
+        delete obj.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];
+      }
     }
-    return { ok: true, yaml: k8s.dumpYaml(obj) };
+    delete obj.status;
+    return { ok: true, yaml: k8s.dumpYaml(obj), editable: true };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -1448,6 +2135,7 @@ ipcMain.handle('get-custom-resource-events', async (_e, ref, contextName, namesp
       : await withTimeout(coreApi.listNamespacedEvent(namespace, undefined, undefined, undefined, fieldSelector), 20000, 'Timed out listing events');
     const rows = (res.body.items || [])
       .map((item) => ({
+        uid: item.metadata?.uid || '',
         type: item.type || '',
         reason: item.reason || '',
         message: item.message || '',
@@ -1455,7 +2143,7 @@ ipcMain.handle('get-custom-resource-events', async (_e, ref, contextName, namesp
         _ts: item.lastTimestamp || item.eventTime || item.metadata?.creationTimestamp,
       }))
       .sort((a, b) => new Date(b._ts || 0) - new Date(a._ts || 0))
-      .map(({ _ts, ...rest }) => ({ ...rest, age: ageOf(_ts) }));
+      .map((item) => ({ ...item, age: ageOf(item._ts) }));
     return { ok: true, rows };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1468,8 +2156,32 @@ ipcMain.handle('custom-resource-action', async (_e, ref, contextName, namespace,
   try {
     const kc = buildKubeConfig(ref, contextName);
     const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+
+    // ── Audit: capture old CRD snapshot before delete ──
+    let oldObj = null;
+    let crdKindLabel = plural;
+    if (auditDb.status().connected) {
+      try {
+        const oldRes = namespaced
+          ? await customApi.getNamespacedCustomObject(group, version, namespace, plural, name)
+          : await customApi.getClusterCustomObject(group, version, plural, name);
+        oldObj = oldRes.body;
+        crdKindLabel = oldObj.kind || plural;
+      } catch { /* best-effort */ }
+    }
+
     if (namespaced) await customApi.deleteNamespacedCustomObject(group, version, namespace, plural, name);
     else await customApi.deleteClusterCustomObject(group, version, plural, name);
+
+    // ── Audit: record after delete ──
+    if (auditDb.status().connected && oldObj) {
+      const editVersion = parseInt(oldObj.metadata?.annotations?.['k8senvdiff-edit-resource-version'] || '0', 10);
+      await recordAudit({
+        ref, contextName, namespace, kind: crdKindLabel, name, action: 'delete',
+        oldObj, newObj: null, editVersion,
+      });
+    }
+
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1706,6 +2418,158 @@ ipcMain.handle('pf-stop', async (_e, sid) => {
   return { ok: true };
 });
 
+// ── Event Auto-Capture & SQLite local storage ────────────────────────────────
+
+let activeWatcherRequest = null;
+let isWatchingEvents = false;
+let eventWatchTimeout = null;
+let currentWatcherRef = null;
+let currentWatcherContext = null;
+let currentWatcherNamespace = null;
+let currentWatcherRetention = 0;
+
+async function startEventWatch(ref, contextName, namespace, retentionDays) {
+  stopEventWatch();
+  
+  if (!ref) return;
+
+  isWatchingEvents = true;
+  currentWatcherRef = ref;
+  currentWatcherContext = contextName;
+  currentWatcherNamespace = namespace;
+  currentWatcherRetention = Number(retentionDays) || 0;
+
+  eventsDb.switchCluster(ref, contextName);
+
+  const makeWatch = async () => {
+    if (!isWatchingEvents) return;
+    
+    try {
+      const kc = buildKubeConfig(ref, contextName);
+      const watch = new k8s.Watch(kc);
+      
+      const allNs = namespace === '__all__' || !namespace;
+      const watchPath = allNs ? '/api/v1/events' : `/api/v1/namespaces/${namespace}/events`;
+      
+      console.log(`[Event Watcher] Starting watcher on path: ${watchPath}`);
+      
+      const req = await watch.watch(
+        watchPath,
+        {
+          allowWatchBookmarks: true
+        },
+        async (type, obj) => {
+          if (!isWatchingEvents) return;
+          if (type === 'ADDED' || type === 'MODIFIED') {
+            try {
+              await eventsDb.saveEvent({
+                uid: obj.metadata?.uid,
+                namespace: obj.metadata?.namespace,
+                involvedKind: obj.involvedObject?.kind,
+                involvedName: obj.involvedObject?.name,
+                reason: obj.reason,
+                message: obj.message,
+                type: obj.type,
+                count: obj.count,
+                firstTimestamp: obj.firstTimestamp,
+                lastTimestamp: obj.lastTimestamp
+              });
+              
+              if (currentWatcherRetention > 0) {
+                await eventsDb.cleanOldEvents(currentWatcherRetention);
+              }
+            } catch (err) {
+              console.error('[Event Watcher] Error saving event to SQLite:', err.message);
+            }
+          }
+        },
+        (err) => {
+          if (err) {
+            console.error('[Event Watcher] Watcher error callback:', err.message);
+          }
+          // Auto reconnect after 5s if still active
+          if (isWatchingEvents) {
+            console.log('[Event Watcher] Reconnecting event watcher in 5s...');
+            clearTimeout(eventWatchTimeout);
+            eventWatchTimeout = setTimeout(makeWatch, 5000);
+          }
+        }
+      );
+      
+      activeWatcherRequest = req;
+    } catch (e) {
+      console.error('[Event Watcher] Failed to initialize event watch:', e.message);
+      if (isWatchingEvents) {
+        clearTimeout(eventWatchTimeout);
+        eventWatchTimeout = setTimeout(makeWatch, 10000);
+      }
+    }
+  };
+
+  await makeWatch();
+}
+
+function stopEventWatch() {
+  isWatchingEvents = false;
+  clearTimeout(eventWatchTimeout);
+  if (activeWatcherRequest) {
+    try {
+      activeWatcherRequest.abort();
+    } catch (e) {
+      // ignore
+    }
+    activeWatcherRequest = null;
+  }
+}
+
+ipcMain.handle('toggle-event-capture', async (_e, { enabled, ref, contextName, namespace, retentionDays }) => {
+  try {
+    if (enabled) {
+      await startEventWatch(ref, contextName, namespace, retentionDays);
+    } else {
+      stopEventWatch();
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('set-event-retention', async (_e, { retentionDays }) => {
+  try {
+    currentWatcherRetention = Number(retentionDays) || 0;
+    if (currentWatcherRetention > 0) {
+      await eventsDb.cleanOldEvents(currentWatcherRetention);
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('clear-event-db', async () => {
+  try {
+    const changes = await eventsDb.clearEvents();
+    return { ok: true, changes };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-local-events', async (_e, { namespace, kind, name }) => {
+  try {
+    const rows = await eventsDb.getLocalEvents(namespace, kind, name);
+    return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// Đảm bảo dừng watcher khi đóng app
+app.on('will-quit', () => {
+  stopEventWatch();
+});
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function isKubeconfigContent(str) {
@@ -1720,7 +2584,7 @@ function buildKubeConfig(ref, contextName) {
     kc.loadFromDefault();
   } else if (aksKcStore.has(ref)) {
     // Stored AKS kubeconfig — already validated at fetch time
-    kc.loadFromString(aksKcStore.get(ref));
+    kc.loadFromString(touchAksKc(ref));
   } else if (isKubeconfigContent(ref)) {
     kc.loadFromString(ref.replace(/^﻿/, '').trimStart());
   } else {
