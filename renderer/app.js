@@ -197,6 +197,7 @@ const el = {
   manageTabs:           document.querySelectorAll('.manage-tab'),
   manageDetailPane:     $('manage-detail-pane'),
   manageYamlPane:       $('manage-yaml-pane'),
+  manageYamlGutter:     $('manage-yaml-gutter'),
   manageYamlOutput:     $('manage-yaml-output'),
   manageYamlCopy:       $('manage-yaml-copy'),
   manageYamlRevealLabel: $('manage-yaml-reveal-label'),
@@ -778,7 +779,7 @@ function stripManifestStatus(yaml) {
 function renderManifestDiff() {
   if (state.manifest.leftYaml == null) return;
   if (state.manifest.rightYaml == null) {
-    el.manifestDiffOutput.innerHTML = `<div class="manage-empty">— not present in B —</div><pre class="manifest-diff-single">${escHtml(state.manifest.leftYaml)}</pre>`;
+    el.manifestDiffOutput.innerHTML = `<div class="manage-empty">— not present in B —</div><pre class="manifest-diff-single">${highlightYaml(state.manifest.leftYaml)}</pre>`;
     return;
   }
   const hideStatus = el.manifestDiffHideStatus.checked;
@@ -787,7 +788,8 @@ function renderManifestDiff() {
   const chunks = Diff.diffLines(left, right);
   el.manifestDiffOutput.innerHTML = chunks.map((part) => {
     const cls = part.added ? 'manifest-diff-line-added' : part.removed ? 'manifest-diff-line-removed' : 'manifest-diff-line-same';
-    return `<div class="manifest-diff-line ${cls}">${escHtml(part.value).replace(/\n/g, '<br>')}</div>`;
+    const html = cls === 'manifest-diff-line-same' ? highlightYaml(part.value) : escHtml(part.value);
+    return `<div class="manifest-diff-line ${cls}">${html.replace(/\n/g, '<br>')}</div>`;
   }).join('');
 }
 
@@ -973,6 +975,90 @@ function escHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/* ── YAML syntax highlighting (Manage YAML tab, Full Manifest Diff, History diff) ────────── */
+const YAML_BOOL_NULL_RE = /^(true|false|yes|no|on|off|null|~)$/i;
+const YAML_NUMBER_RE = /^[-+]?(0x[0-9a-fA-F]+|0o[0-7]+|(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?|\.inf|\.nan)$/i;
+const YAML_BLOCK_SCALAR_RE = /^[|>][+-]?\d*$/;
+const YAML_KEY_RE = /^(-\s+)?((?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^:#\s][^:]*?)):([ \t][\s\S]*)?$/;
+const YAML_LIST_SCALAR_RE = /^(-\s+)([\s\S]*)$/;
+
+function findYamlCommentStart(s) {
+  let inSingle = false, inDouble = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inSingle) { if (c === "'") inSingle = false; continue; }
+    if (inDouble) { if (c === '\\') { i++; } else if (c === '"') inDouble = false; continue; }
+    if (c === "'") { inSingle = true; continue; }
+    if (c === '"') { inDouble = true; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(s[i - 1]))) return i;
+  }
+  return -1;
+}
+
+function tokenizeYamlScalar(text) {
+  const [, lead, core, trail] = text.match(/^(\s*)([\s\S]*?)(\s*)$/);
+  if (core === '') return escHtml(text);
+  let cls = 'yaml-string';
+  if (YAML_BOOL_NULL_RE.test(core)) cls = 'yaml-bool';
+  else if (YAML_NUMBER_RE.test(core)) cls = 'yaml-number';
+  else if (YAML_BLOCK_SCALAR_RE.test(core)) cls = 'yaml-punct';
+  return `${escHtml(lead)}<span class="${cls}">${escHtml(core)}</span>${escHtml(trail)}`;
+}
+
+function renderYamlIndentGuides(indent) {
+  const unit = 2;
+  let html = '';
+  let i = 0;
+  for (; i + unit <= indent.length; i += unit) {
+    html += `<span class="yaml-indent-guide">${escHtml(indent.slice(i, i + unit))}</span>`;
+  }
+  if (i < indent.length) html += escHtml(indent.slice(i));
+  return html;
+}
+
+function highlightYamlLine(line) {
+  const [, indent, rest] = line.match(/^(\s*)([\s\S]*)$/);
+  if (rest === '') return escHtml(indent);
+  const indentHtml = renderYamlIndentGuides(indent);
+  const trimmedRest = rest.trim();
+  if (trimmedRest === '---' || trimmedRest === '...') {
+    return `${indentHtml}<span class="yaml-docsep">${escHtml(trimmedRest)}</span>`;
+  }
+  if (rest[0] === '#') {
+    return `${indentHtml}<span class="yaml-comment">${escHtml(rest)}</span>`;
+  }
+
+  const commentIdx = findYamlCommentStart(rest);
+  const valuePart = commentIdx === -1 ? rest : rest.slice(0, commentIdx);
+  const commentPart = commentIdx === -1 ? '' : rest.slice(commentIdx);
+
+  let bodyHtml;
+  const keyMatch = valuePart.match(YAML_KEY_RE);
+  if (keyMatch) {
+    const dash = keyMatch[1] || '';
+    const key = keyMatch[2];
+    const tail = keyMatch[3];
+    bodyHtml = (dash ? `<span class="yaml-dash">${escHtml(dash)}</span>` : '')
+      + `<span class="yaml-key">${escHtml(key)}</span><span class="yaml-punct">:</span>`
+      + (tail ? tokenizeYamlScalar(tail) : '');
+  } else {
+    const listMatch = valuePart.match(YAML_LIST_SCALAR_RE);
+    if (listMatch) {
+      bodyHtml = `<span class="yaml-dash">${escHtml(listMatch[1])}</span>${tokenizeYamlScalar(listMatch[2])}`;
+    } else {
+      bodyHtml = tokenizeYamlScalar(valuePart);
+    }
+  }
+
+  const commentHtml = commentPart ? `<span class="yaml-comment">${escHtml(commentPart)}</span>` : '';
+  return indentHtml + bodyHtml + commentHtml;
+}
+
+function highlightYaml(text) {
+  if (text == null) return '';
+  return String(text).split('\n').map(highlightYamlLine).join('\n');
 }
 
 /* ── Export helpers (shared by Env Vars / Full Manifest / Storage / ServiceBus diffs) ────── */
@@ -3996,6 +4082,81 @@ function switchManageTab(tab) {
   }
 }
 
+// Line-number gutter, shared by the read-only <pre> and the edit <textarea> so both views
+// share identical layout. Gutter scrolls in lockstep with whichever element is visible.
+function updateManageYamlGutter(text) {
+  const count = Math.max(1, (text || '').split('\n').length);
+  const numbers = [];
+  for (let i = 1; i <= count; i++) numbers.push(i);
+  el.manageYamlGutter.textContent = numbers.join('\n');
+  el.manageYamlGutter.scrollTop = 0;
+}
+
+// In view mode the <pre> is the scroller (syncs the gutter). In edit mode the transparent
+// <textarea> sits on top and is the real scroller, so it must mirror both axes to the <pre>
+// behind it plus the gutter's vertical offset.
+function syncManageYamlScroll() {
+  el.manageYamlOutput.scrollTop  = el.manageYamlTextarea.scrollTop;
+  el.manageYamlOutput.scrollLeft = el.manageYamlTextarea.scrollLeft;
+  el.manageYamlGutter.scrollTop  = el.manageYamlTextarea.scrollTop;
+}
+
+// Re-highlight the <pre> layer + gutter from the current textarea value, then re-sync scroll.
+// Call after any programmatic change to textarea.value (assignment does not fire 'input').
+function refreshManageYamlEditLayer() {
+  el.manageYamlOutput.innerHTML = highlightYaml(el.manageYamlTextarea.value);
+  updateManageYamlGutter(el.manageYamlTextarea.value);
+  syncManageYamlScroll();
+}
+
+el.manageYamlOutput.addEventListener('scroll', () => {
+  el.manageYamlGutter.scrollTop = el.manageYamlOutput.scrollTop;
+});
+el.manageYamlTextarea.addEventListener('scroll', syncManageYamlScroll);
+el.manageYamlTextarea.addEventListener('input', refreshManageYamlEditLayer);
+
+// Tab / Shift+Tab indent by 2 spaces (YAML uses spaces, never literal tabs).
+el.manageYamlTextarea.addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab') return;
+  e.preventDefault();
+  const ta = el.manageYamlTextarea;
+  const INDENT = '  ';
+  const val = ta.value;
+  const selStart = ta.selectionStart;
+  const selEnd = ta.selectionEnd;
+
+  // Multi-line selection (or Shift+Tab): operate on whole affected lines.
+  if (e.shiftKey || val.slice(selStart, selEnd).includes('\n')) {
+    const lineStart = val.lastIndexOf('\n', selStart - 1) + 1;
+    const block = val.slice(lineStart, selEnd);
+    let newBlock, delta, firstLineDelta;
+    if (e.shiftKey) {
+      let removedFirst = 0, removedTotal = 0, seenFirst = false;
+      newBlock = block.split('\n').map((line) => {
+        const strip = line.startsWith('  ') ? 2 : line.startsWith(' ') ? 1 : 0;
+        if (!seenFirst) { removedFirst = strip; seenFirst = true; }
+        removedTotal += strip;
+        return line.slice(strip);
+      }).join('\n');
+      firstLineDelta = -removedFirst;
+      delta = -removedTotal;
+    } else {
+      const lines = block.split('\n');
+      newBlock = lines.map((line) => INDENT + line).join('\n');
+      firstLineDelta = INDENT.length;
+      delta = INDENT.length * lines.length;
+    }
+    ta.value = val.slice(0, lineStart) + newBlock + val.slice(selEnd);
+    ta.selectionStart = Math.max(lineStart, selStart + firstLineDelta);
+    ta.selectionEnd = selEnd + delta;
+  } else {
+    // Collapsed caret (or single-line selection): insert 2 spaces at the caret.
+    ta.value = val.slice(0, selStart) + INDENT + val.slice(selEnd);
+    ta.selectionStart = ta.selectionEnd = selStart + INDENT.length;
+  }
+  refreshManageYamlEditLayer();
+});
+
 // Fetches are one-shot (not polled); each captures the resource identity at request time and
 // drops the response if the user has since selected a different row/kind/namespace.
 async function loadManageYaml() {
@@ -4005,6 +4166,7 @@ async function loadManageYaml() {
   data.yamlEditing = false;
   switchManageYamlView();
   el.manageYamlOutput.textContent = 'Loading…';
+  updateManageYamlGutter('Loading…');
 
   if (data.mode === 'crd') {
     const crd = data.activeCrd;
@@ -4012,7 +4174,9 @@ async function loadManageYaml() {
       data.kubeconfig, data.context, manageRowNamespace(row), crd.group, crd.version, crd.plural, row.name, crd.namespaced
     );
     if (!isSameResource(data.selected, row)) return;
-    el.manageYamlOutput.textContent = result.ok ? result.yaml : `Error: ${result.error}`;
+    if (result.ok) el.manageYamlOutput.innerHTML = highlightYaml(result.yaml);
+    else el.manageYamlOutput.textContent = `Error: ${result.error}`;
+    updateManageYamlGutter(result.ok ? result.yaml : result.error);
     data.yamlEditable = result.ok ? result.editable !== false : false;
     renderManageYamlEditGate();
     return;
@@ -4023,7 +4187,9 @@ async function loadManageYaml() {
     data.kubeconfig, data.context, manageRowNamespace(row), kind, row.name, { reveal: data.revealSecrets }
   );
   if (!isSameResource(data.selected, row) || data.resourceType !== kind) return;
-  el.manageYamlOutput.textContent = result.ok ? result.yaml : `Error: ${result.error}`;
+  if (result.ok) el.manageYamlOutput.innerHTML = highlightYaml(result.yaml);
+  else el.manageYamlOutput.textContent = `Error: ${result.error}`;
+  updateManageYamlGutter(result.ok ? result.yaml : result.error);
   data.yamlEditable = result.ok ? result.editable !== false : false;
   renderManageYamlEditGate();
 }
@@ -4043,7 +4209,9 @@ function renderManageYamlEditGate() {
 
 function switchManageYamlView() {
   const editing = state.manage.yamlEditing;
-  el.manageYamlOutput.style.display = editing ? 'none' : '';
+  // The highlighted <pre> is always the visible layer; in edit mode the transparent
+  // <textarea> overlays it to capture input while the <pre> shows live-highlighted text.
+  el.manageYamlOutput.style.display = '';
   el.manageYamlTextarea.style.display = editing ? '' : 'none';
   el.manageYamlEdit.style.display = editing ? 'none' : '';
   el.manageYamlSave.style.display = editing ? '' : 'none';
@@ -4059,6 +4227,7 @@ async function enterManageYamlEdit() {
   if (!row || !data.yamlEditable || !data.writeUnlocked) return;
   el.manageYamlError.style.display = 'none';
   el.manageYamlOutput.textContent = 'Loading…';
+  updateManageYamlGutter('Loading…');
 
   let result;
   if (data.mode === 'crd') {
@@ -4074,10 +4243,13 @@ async function enterManageYamlEdit() {
   if (!isSameResource(data.selected, row)) return; // stale guard — user switched rows while this was in flight
   if (!result.ok) {
     el.manageYamlOutput.textContent = `Error: ${result.error}`;
+    updateManageYamlGutter(result.error);
     return;
   }
   data.yamlEditing = true;
   el.manageYamlTextarea.value = result.yaml;
+  el.manageYamlOutput.innerHTML = highlightYaml(result.yaml); // highlight layer matches from the first frame
+  updateManageYamlGutter(result.yaml);
   switchManageYamlView();
 }
 
@@ -4122,8 +4294,9 @@ async function saveManageYamlEdit() {
   el.manageYamlError.style.display = 'none';
   el.manageYamlReload.style.display = 'none';
   data.yamlEditing = false;
-  el.manageYamlOutput.textContent = result.yaml; // the visible <pre> — was left stuck on "Loading…" otherwise
+  el.manageYamlOutput.innerHTML = highlightYaml(result.yaml); // the visible <pre> — was left stuck on "Loading…" otherwise
   el.manageYamlTextarea.value = result.yaml;
+  updateManageYamlGutter(result.yaml);
   switchManageYamlView();
   refreshManageResources(); // row list may reflect the change (e.g. labels, replicas)
 }
@@ -4756,7 +4929,8 @@ async function showHistoryDiff(id) {
     const chunks = Diff.diffLines(oldYaml, newYaml);
     html = chunks.map((part) => {
       const cls = part.added ? 'manifest-diff-line-added' : part.removed ? 'manifest-diff-line-removed' : 'manifest-diff-line-same';
-      return `<div class="manifest-diff-line ${cls}">${escHtml(part.value).replace(/\n/g, '<br>')}</div>`;
+      const partHtml = cls === 'manifest-diff-line-same' ? highlightYaml(part.value) : escHtml(part.value);
+      return `<div class="manifest-diff-line ${cls}">${partHtml.replace(/\n/g, '<br>')}</div>`;
     }).join('');
   }
 

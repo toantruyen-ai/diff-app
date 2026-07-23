@@ -673,8 +673,13 @@
             <button id="manage-yaml-reload" class="btn btn-xs btn-ghost" style="display:none">Reload</button>
           </div>
           <div id="manage-yaml-error" class="manage-yaml-error" style="display:none"></div>
-          <pre id="manage-yaml-output" class="manage-yaml-output"></pre>
-          <textarea id="manage-yaml-textarea" class="manage-yaml-output manage-yaml-textarea" style="display:none" spellcheck="false"></textarea>
+          <div class="manage-yaml-body">
+            <pre id="manage-yaml-gutter" class="manage-yaml-gutter"></pre>
+            <div class="manage-yaml-content">
+              <pre id="manage-yaml-output" class="manage-yaml-output"></pre>
+              <textarea id="manage-yaml-textarea" class="manage-yaml-output manage-yaml-textarea" style="display:none" spellcheck="false"></textarea>
+            </div>
+          </div>
         </div>
         <div id="manage-events-pane" class="manage-events-pane" style="display:none">
           <div class="sdr-table-wrap">

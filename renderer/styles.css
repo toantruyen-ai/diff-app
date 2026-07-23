@@ -1657,8 +1657,39 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   flex-shrink: 0;
 }
 
-.manage-yaml-output {
+.manage-yaml-body {
   flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.manage-yaml-gutter {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 10px 10px 10px 14px;
+  overflow: hidden;
+  background: var(--bg-base);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre;
+  text-align: right;
+  user-select: none;
+  border-right: 1px solid var(--border-dim);
+}
+
+.manage-yaml-content {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.manage-yaml-output {
+  position: absolute;
+  inset: 0;
   margin: 0;
   padding: 10px 14px;
   overflow: auto;
@@ -1666,19 +1697,37 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 12px;
+  line-height: 18px;
   white-space: pre;
 }
 .manage-yaml-output::-webkit-scrollbar { width: 6px; height: 6px; }
 .manage-yaml-output::-webkit-scrollbar-track { background: transparent; }
 .manage-yaml-output::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
+.yaml-key     { color: var(--accent); }
+.yaml-string  { color: var(--green); }
+.yaml-number  { color: var(--missing-text); }
+.yaml-bool    { color: var(--badge-b); }
+.yaml-comment { color: var(--text-muted); font-style: italic; }
+.yaml-punct,
+.yaml-dash    { color: var(--text-dim); }
+.yaml-docsep  { color: var(--text-dim); font-weight: 600; }
+/* Draw the guide as a 1px background line, NOT a border — a border adds layout width to the
+   <pre> that the overlay <textarea> lacks, drifting the caret off deeply-indented glyphs. */
+.yaml-indent-guide { background-image: linear-gradient(to right, var(--border-dim) 0 1px, transparent 1px); }
+
 .manage-yaml-textarea {
   resize: none;
   border: none;
   outline: none;
-  width: 100%;
   box-sizing: border-box;
+  z-index: 2;                       /* overlay above the highlighted <pre> */
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);         /* keep the caret visible over transparent text */
+  -webkit-text-fill-color: transparent;
 }
+.manage-yaml-textarea::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
 .manage-yaml-error {
   color: var(--red, #e5484d);
   font-size: 12px;
