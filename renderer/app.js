@@ -18,6 +18,7 @@ const state = {
     selected: null,       // row shown in the drawer
     pollTimer: null,
     logSession: null,     // { sid, disposers: [] }
+    execSession: null,    // { sid, term, fitAddon, resizeObserver, dataDisposable, disposers }
   },
 };
 
@@ -137,6 +138,10 @@ const el = {
   manageLogTail:        $('manage-log-tail'),
   manageLogClear:       $('manage-log-clear'),
   manageLogOutput:      $('manage-log-output'),
+  manageExecPane:       $('manage-exec-pane'),
+  manageExecContainer:  $('manage-exec-container'),
+  manageExecStatus:     $('manage-exec-status'),
+  manageTerm:           $('manage-term'),
 };
 
 /* ── Loading helpers ─────────────────────────────────────────────────────── */
@@ -590,10 +595,11 @@ const BACK_TARGETS = {
 
 function showView(view) {
   // Sole teardown choke point: leaving the manage workspace always stops its
-  // poller and any open log stream, so nothing keeps running in the background.
+  // poller and any open log/exec stream, so nothing keeps running in the background.
   if (view !== 'manage') {
     stopManagePolling();
     stopManageLogs();
+    stopManageExec();
   }
 
   el.homeView.style.display              = view === 'home'                   ? 'flex' : 'none';
@@ -627,6 +633,7 @@ el.cardK8sManage.addEventListener('click', () => {
 window.addEventListener('beforeunload', () => {
   stopManagePolling();
   stopManageLogs();
+  stopManageExec();
 });
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -1543,21 +1550,28 @@ function stopManagePolling() {
    ════════════════════════════════════════════════════════════════════════════ */
 function openManageDrawer(kind, row) {
   stopManageLogs();
+  stopManageExec();
   state.manage.selected = row;
   el.manageDrawer.classList.add('open');
   el.manageDrawerTitle.textContent = row.name || '—';
   renderManageDetail(kind, row);
 
-  const logsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="logs"]');
   const isPod = kind === 'pods';
+  const logsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="logs"]');
+  const execTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="exec"]');
   logsTabBtn.style.display = isPod ? '' : 'none';
-  if (isPod) populateManageLogContainerPicker(row.containers || []);
+  execTabBtn.style.display = isPod ? '' : 'none';
+  if (isPod) {
+    populateManageLogContainerPicker(row.containers || []);
+    populateManageExecContainerPicker(row.containers || []);
+  }
 
   switchManageTab('detail');
 }
 
 function closeManageDrawer() {
   stopManageLogs();
+  stopManageExec();
   state.manage.selected = null;
   el.manageDrawer.classList.remove('open');
 }
@@ -1584,10 +1598,16 @@ function switchManageTab(tab) {
   el.manageTabs.forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   el.manageDetailPane.style.display = tab === 'detail' ? '' : 'none';
   el.manageLogsPane.style.display = tab === 'logs' ? 'flex' : 'none';
+  el.manageExecPane.style.display = tab === 'exec' ? 'flex' : 'none';
   if (tab === 'logs') {
     if (el.manageLogContainer.value) startManageLogs();
   } else {
     stopManageLogs();
+  }
+  if (tab === 'exec') {
+    if (el.manageExecContainer.value) startManageExec();
+  } else {
+    stopManageExec();
   }
 }
 
@@ -1602,8 +1622,23 @@ function populateManageLogContainerPicker(containers) {
   el.manageLogContainer.disabled = containers.length === 0;
 }
 
+
+function populateManageExecContainerPicker(containers) {
+  el.manageExecContainer.innerHTML = '';
+  containers.forEach((name) => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    el.manageExecContainer.appendChild(opt);
+  });
+  el.manageExecContainer.disabled = containers.length === 0;
+}
+
 el.manageLogContainer.addEventListener('change', () => {
   if (el.manageLogsPane.style.display === 'flex') startManageLogs();
+});
+el.manageExecContainer.addEventListener('change', () => {
+  if (el.manageExecPane.style.display === 'flex') startManageExec();
 });
 
 el.manageLogFollow.addEventListener('change', () => {
@@ -1664,6 +1699,74 @@ function appendLogBatch(text) {
     el.manageLogOutput.textContent = lines.slice(-MANAGE_LOG_MAX_LINES).join('\n');
   }
   if (shouldFollow) el.manageLogOutput.scrollTop = el.manageLogOutput.scrollHeight;
+}
+
+
+function startManageExec() {
+  stopManageExec();
+  const data = state.manage;
+  const row = data.selected;
+  const container = el.manageExecContainer.value;
+  if (!row || !container) return;
+
+  const sid = crypto.randomUUID();
+  el.manageExecStatus.textContent = 'Connecting…';
+
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim();
+  const fg = getComputedStyle(document.documentElement).getPropertyValue('--text').trim();
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  const term = new Terminal({
+    convertEol: true,
+    fontSize: 12,
+    fontFamily: 'var(--font-mono)',
+    theme: { background: bg, foreground: fg, cursor: accent },
+  });
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  el.manageTerm.innerHTML = '';
+  term.open(el.manageTerm);
+  fitAddon.fit();
+
+  const dataDisposable = term.onData((d) => window.k8sApi.execWrite(sid, d));
+  const resizeObserver = new ResizeObserver(() => {
+    fitAddon.fit();
+    window.k8sApi.execResize(sid, term.cols, term.rows);
+  });
+  resizeObserver.observe(el.manageTerm);
+
+  // Subscribe before starting the session so the first bytes can't race past us.
+  const disposers = [
+    window.k8sApi.onExecData(sid, (chunk) => term.write(chunk)),
+    window.k8sApi.onExecExit(sid, (status) => {
+      const msg = (status && (status.message || status.status)) || 'session closed';
+      term.write(`\r\n\x1b[2m[${msg}]\x1b[0m\r\n`);
+      el.manageExecStatus.textContent = 'Closed';
+    }),
+  ];
+
+  data.execSession = { sid, term, fitAddon, resizeObserver, dataDisposable, disposers };
+
+  window.k8sApi.startExec(data.kubeconfig, data.context, data.namespace, row.name, container, sid)
+    .then((res) => {
+      if (!data.execSession || data.execSession.sid !== sid) return; // superseded/stopped while connecting
+      if (res && res.ok) {
+        el.manageExecStatus.textContent = '';
+        window.k8sApi.execResize(sid, term.cols, term.rows);
+      } else {
+        el.manageExecStatus.textContent = (res && res.error) || 'Failed to start shell';
+      }
+    });
+}
+
+function stopManageExec() {
+  const session = state.manage.execSession;
+  if (!session) return;
+  window.k8sApi.stopExec(session.sid);
+  session.disposers.forEach((dispose) => dispose());
+  session.dataDisposable.dispose();
+  session.resizeObserver.disconnect();
+  session.term.dispose();
+  state.manage.execSession = null;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

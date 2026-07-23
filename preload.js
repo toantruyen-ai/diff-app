@@ -40,4 +40,20 @@ contextBridge.exposeInMainWorld('k8sApi', {
     ipcRenderer.on(`pod-log-error:${sid}`, handler);
     return () => ipcRenderer.removeListener(`pod-log-error:${sid}`, handler);
   },
+
+  startExec: (ref, ctx, ns, pod, container, sid) =>
+    ipcRenderer.invoke('exec-start', ref, ctx, ns, pod, container, sid),
+  execWrite: (sid, data) => ipcRenderer.send('exec-write', sid, data),
+  execResize: (sid, cols, rows) => ipcRenderer.send('exec-resize', sid, cols, rows),
+  stopExec: (sid) => ipcRenderer.invoke('exec-stop', sid),
+  onExecData: (sid, cb) => {
+    const handler = (_e, chunk) => cb(chunk);
+    ipcRenderer.on(`exec-data:${sid}`, handler);
+    return () => ipcRenderer.removeListener(`exec-data:${sid}`, handler);
+  },
+  onExecExit: (sid, cb) => {
+    const handler = (_e, status) => cb(status);
+    ipcRenderer.on(`exec-exit:${sid}`, handler);
+    return () => ipcRenderer.removeListener(`exec-exit:${sid}`, handler);
+  },
 });

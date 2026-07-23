@@ -5,6 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Diff-App</title>
+  <link rel="stylesheet" href="vendor/xterm/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 
@@ -471,6 +472,7 @@
         <nav class="manage-drawer-tabs">
           <button class="manage-tab active" data-tab="detail">Detail</button>
           <button class="manage-tab" data-tab="logs">Logs</button>
+          <button class="manage-tab" data-tab="exec">Exec</button>
         </nav>
         <div id="manage-detail-pane" class="manage-detail-pane"></div>
         <div id="manage-logs-pane" class="manage-logs-pane" style="display:none">
@@ -483,6 +485,13 @@
             <button id="manage-log-clear" class="btn btn-xs btn-ghost">Clear</button>
           </div>
           <pre id="manage-log-output" class="manage-log-output"></pre>
+        </div>
+        <div id="manage-exec-pane" class="manage-exec-pane" style="display:none">
+          <div class="manage-exec-toolbar">
+            <select id="manage-exec-container"></select>
+            <span id="manage-exec-status" class="manage-exec-status"></span>
+          </div>
+          <div id="manage-term" class="manage-term"></div>
         </div>
       </aside>
     </div>
@@ -521,6 +530,8 @@
     </div>
   </div>
 
+  <script src="vendor/xterm/xterm.js"></script>
+  <script src="vendor/xterm/addon-fit.js"></script>
   <script src="app.js"></script>
 </body>
 

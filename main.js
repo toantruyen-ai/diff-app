@@ -89,9 +89,10 @@ function createWindow() {
     if (autoUpdater) setTimeout(() => autoUpdater.checkForUpdates().catch(() => { }), 5000);
   });
   mainWindow.on('closed', () => {
-    // Pod log streams hold an open HTTP request to the cluster — abort them all,
-    // otherwise they keep running (and keep the process alive) after the window is gone.
+    // Pod log streams and exec sessions hold open connections to the cluster —
+    // abort them all, otherwise they keep running after the window is gone.
     for (const sid of logSessions.keys()) stopLogSession(sid);
+    for (const sid of execSessions.keys()) stopExecSession(sid);
     mainWindow = null;
   });
 }
@@ -728,6 +729,97 @@ ipcMain.handle('start-pod-logs', async (_e, ref, contextName, namespace, pod, co
 
 ipcMain.handle('stop-pod-logs', async (_e, sid) => {
   stopLogSession(sid);
+  return { ok: true };
+});
+
+// ── K8s Manage: pod exec/shell ───────────────────────────────────────────────
+const { PassThrough } = require('stream');
+
+// sid -> { stdin, stdout, ws }. One entry per open drawer exec/terminal session.
+const execSessions = new Map();
+
+function stopExecSession(sid) {
+  const session = execSessions.get(sid);
+  if (!session) return;
+  try { session.stdin.end(); } catch { /* already closed */ }
+  try { session.ws && session.ws.close(); } catch { /* already closed */ }
+  execSessions.delete(sid);
+}
+
+ipcMain.handle('exec-start', async (_e, ref, contextName, namespace, pod, container, sid) => {
+  stopExecSession(sid);
+
+  const sendIfAlive = (channel, ...args) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
+  };
+
+  const stdin = new PassThrough();
+  // stdout doubles as stderr — like a real terminal, both streams interleave into
+  // one output. It also carries rows/columns + EventEmitter so Exec treats it as
+  // resizable and opens the resize channel (see terminal-size-queue.js).
+  const stdout = new Writable({
+    write(chunk, _enc, callback) {
+      sendIfAlive(`exec-data:${sid}`, chunk.toString('utf8'));
+      callback();
+    },
+  });
+  stdout.rows = 24;
+  stdout.columns = 80;
+
+  const session = { stdin, stdout, ws: null };
+  execSessions.set(sid, session);
+
+  try {
+    const kc = buildKubeConfig(ref, contextName);
+    const execApi = new k8s.Exec(kc);
+    const ws = await execApi.exec(
+      namespace,
+      pod,
+      container,
+      ['/bin/sh', '-c', 'exec /bin/bash || exec /bin/sh'],
+      stdout,
+      stdout,
+      stdin,
+      true,
+      (status) => {
+        sendIfAlive(`exec-exit:${sid}`, status);
+        stopExecSession(sid);
+      }
+    );
+    if (!execSessions.has(sid)) {
+      // exec-stop was called while the connection was still opening
+      try { ws.close(); } catch { /* ignore */ }
+      return { ok: true };
+    }
+    session.ws = ws;
+    ws.on('error', (err) => {
+      sendIfAlive(`exec-exit:${sid}`, { status: 'Failure', message: err.message });
+      stopExecSession(sid);
+    });
+    ws.on('close', () => stopExecSession(sid));
+    return { ok: true };
+  } catch (e) {
+    stopExecSession(sid);
+    sendIfAlive(`exec-exit:${sid}`, { status: 'Failure', message: e.message });
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.on('exec-write', (_e, sid, data) => {
+  const session = execSessions.get(sid);
+  if (session) session.stdin.write(data);
+});
+
+ipcMain.on('exec-resize', (_e, sid, cols, rows) => {
+  const session = execSessions.get(sid);
+  if (!session) return;
+  session.stdout.columns = cols;
+  session.stdout.rows = rows;
+  session.stdout.emit('resize');
+});
+
+ipcMain.handle('exec-stop', async (_e, sid) => {
+  stopExecSession(sid);
   return { ok: true };
 });
 
