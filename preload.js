@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('k8sApi', {
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_e, v) => cb(v)),
 
   listResource: (ref, ctx, ns, kind) => ipcRenderer.invoke('list-resource', ref, ctx, ns, kind),
+  getMetrics: (ref, ctx, ns, scope) => ipcRenderer.invoke('get-metrics', ref, ctx, ns, scope),
 
   startPodLogs: (ref, ctx, ns, pod, container, opts, sid) =>
     ipcRenderer.invoke('start-pod-logs', ref, ctx, ns, pod, container, opts, sid),

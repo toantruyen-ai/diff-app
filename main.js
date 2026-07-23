@@ -652,6 +652,52 @@ ipcMain.handle('list-resource', async (_e, ref, contextName, namespace, kind) =>
   }
 });
 
+// ── K8s Manage: metrics ──────────────────────────────────────────────────────
+
+const MANAGE_METRICS_SCOPES = ['pods', 'nodes'];
+
+// '250m'->250, '1'->1000, '1500000000n'->1.5, '2000u'->2
+function parseCpuMillis(cpu) {
+  const s = String(cpu || '0');
+  if (s.endsWith('n')) return parseFloat(s) / 1e6;
+  if (s.endsWith('u')) return parseFloat(s) / 1e3;
+  if (s.endsWith('m')) return parseFloat(s);
+  return parseFloat(s) * 1000;
+}
+
+// '128974848' (bytes), '512Ki'/'256Mi'/'1Gi', '500k'/'2M' -> bytes
+function parseMemoryBytes(mem) {
+  const match = String(mem || '0').match(/^(\d+(?:\.\d+)?)([A-Za-z]*)$/);
+  if (!match) return 0;
+  const units = { Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4, K: 1000, M: 1000 ** 2, G: 1000 ** 3 };
+  return parseFloat(match[1]) * (units[match[2]] || 1);
+}
+
+// scope='pods' sums per-container usage into a pod-level total; scope='nodes' reads node usage directly.
+// Metrics API returns raw parsed JSON (no {body} wrapper, unlike the typed k8s.*Api clients).
+ipcMain.handle('get-metrics', async (_e, ref, contextName, namespace, scope) => {
+  if (!MANAGE_METRICS_SCOPES.includes(scope)) return { ok: false, error: `Unknown metrics scope: ${scope}` };
+  try {
+    const kc = buildKubeConfig(ref, contextName);
+    const metricsApi = new k8s.Metrics(kc);
+    const res = scope === 'nodes'
+      ? await withTimeout(metricsApi.getNodeMetrics(), 10000, 'Timed out fetching node metrics')
+      : await withTimeout(metricsApi.getPodMetrics(namespace), 10000, 'Timed out fetching pod metrics');
+
+    const rows = (res.items || []).map((item) => {
+      const usages = scope === 'nodes' ? [item.usage || {}] : (item.containers || []).map((c) => c.usage || {});
+      const cpu = usages.reduce((sum, u) => sum + parseCpuMillis(u.cpu), 0);
+      const memory = usages.reduce((sum, u) => sum + parseMemoryBytes(u.memory), 0);
+      return { name: item.metadata.name, cpu, memory };
+    });
+    return { ok: true, rows };
+  } catch (e) {
+    // metrics-server not installed/unreachable is the overwhelmingly common failure here —
+    // callers stop polling and show a notice instead of alerting.
+    return { ok: false, reason: 'metrics-server-unavailable', error: e.message };
+  }
+});
+
 // ── K8s Manage: pod log streaming ────────────────────────────────────────────
 const { Writable } = require('stream');
 

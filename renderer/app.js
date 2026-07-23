@@ -19,6 +19,9 @@ const state = {
     pollTimer: null,
     logSession: null,     // { sid, disposers: [] }
     execSession: null,    // { sid, term, fitAddon, resizeObserver, dataDisposable, disposers }
+    metricsSeries: new Map(),  // name -> ring buffer [{t,cpu(millicores),mem(bytes)}], point-in-time samples
+    metricsPollTimer: null,
+    metricsAvailable: true,    // false once metrics-server proves unreachable — stops polling until kind/ns/context changes
   },
 };
 
@@ -142,6 +145,7 @@ const el = {
   manageExecContainer:  $('manage-exec-container'),
   manageExecStatus:     $('manage-exec-status'),
   manageTerm:           $('manage-term'),
+  manageMetricsPane:    $('manage-metrics-pane'),
 };
 
 /* ── Loading helpers ─────────────────────────────────────────────────────── */
@@ -598,6 +602,7 @@ function showView(view) {
   // poller and any open log/exec stream, so nothing keeps running in the background.
   if (view !== 'manage') {
     stopManagePolling();
+    stopManageMetricsPolling();
     stopManageLogs();
     stopManageExec();
   }
@@ -1327,6 +1332,7 @@ async function loadManageNamespaces() {
       data.namespace = defaultNs;
       refreshManageResources();
       startManagePolling();
+      startManageMetricsPolling();
     }
   } catch (e) {
     alert(`Failed to load namespaces: ${e.message}`);
@@ -1342,6 +1348,7 @@ el.manageContext.addEventListener('change', async () => {
   el.manageNamespace.innerHTML = '<option value="">— select namespace —</option>';
   el.manageNamespace.disabled = true;
   stopManagePolling();
+  stopManageMetricsPolling();
   closeManageDrawer();
   renderManageTable(data.resourceType, []);
   if (data.context) await loadManageNamespaces();
@@ -1351,10 +1358,12 @@ el.manageNamespace.addEventListener('change', () => {
   const data = state.manage;
   data.namespace = el.manageNamespace.value || null;
   stopManagePolling();
+  stopManageMetricsPolling();
   closeManageDrawer();
   if (data.namespace) {
     refreshManageResources();
     startManagePolling();
+    startManageMetricsPolling();
   } else {
     renderManageTable(data.resourceType, []);
   }
@@ -1373,6 +1382,8 @@ const MANAGE_COLUMN_DEFS = {
     { key: 'status', label: 'Status', status: true },
     { key: 'restarts', label: 'Restarts' },
     { key: 'node', label: 'Node' },
+    { key: 'cpu', label: 'CPU', spark: 'cpu' },
+    { key: 'mem', label: 'Memory', spark: 'mem' },
     { key: 'age', label: 'Age', age: true },
   ],
   deployments: [
@@ -1418,6 +1429,8 @@ const MANAGE_COLUMN_DEFS = {
     { key: 'status', label: 'Status', status: true },
     { key: 'roles', label: 'Roles' },
     { key: 'version', label: 'Version' },
+    { key: 'cpu', label: 'CPU', spark: 'cpu' },
+    { key: 'mem', label: 'Memory', spark: 'mem' },
     { key: 'age', label: 'Age', age: true },
   ],
   events: [
@@ -1432,6 +1445,10 @@ const MANAGE_COLUMN_DEFS = {
 // Nodes/Events change slowly and are usually shared across many namespaces —
 // polling them as often as pods just adds load for no benefit.
 const MANAGE_POLL_INTERVAL = { nodes: 10000, events: 10000 };
+
+const MANAGE_METRICS_KINDS = ['pods', 'nodes'];
+const MANAGE_METRICS_POLL_INTERVAL = 10000;
+const MANAGE_METRICS_MAX_POINTS = 60;
 
 function relAge(ts) {
   if (!ts) return '';
@@ -1465,9 +1482,11 @@ function selectManageKind(kind) {
   el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === kind));
   closeManageDrawer();
   stopManagePolling();
+  stopManageMetricsPolling();
   if (data.context && data.namespace) {
     refreshManageResources();
     startManagePolling();
+    startManageMetricsPolling();
   } else {
     renderManageTable(kind, []);
   }
@@ -1491,6 +1510,7 @@ function renderManageTable(kind, rows) {
     tr.style.cursor = 'pointer';
     tr.innerHTML = cols.map((c) => {
       const val = row[c.key];
+      if (c.spark) return `<td><span class="manage-spark" data-row="${escHtml(row.name)}" data-metric="${c.spark}"></span></td>`;
       if (c.age) return `<td>${escHtml(relAge(val))}</td>`;
       if (c.status) return `<td><span class="status-pill ${manageStatusClass(val)}">${escHtml(val || '')}</span></td>`;
       return `<td>${escHtml(val ?? '')}</td>`;
@@ -1498,6 +1518,7 @@ function renderManageTable(kind, rows) {
     tr.addEventListener('click', () => openManageDrawer(kind, row));
     el.manageTbody.appendChild(tr);
   }
+  renderManageMetricsSparklines();
 }
 
 function renderManageErrorRow(kind, error) {
@@ -1545,6 +1566,118 @@ function stopManagePolling() {
   }
 }
 
+
+function startManageMetricsPolling() {
+  stopManageMetricsPolling();
+  if (!MANAGE_METRICS_KINDS.includes(state.manage.resourceType)) return;
+  refreshManageMetrics();
+  state.manage.metricsPollTimer = setInterval(refreshManageMetrics, MANAGE_METRICS_POLL_INTERVAL);
+}
+
+function stopManageMetricsPolling() {
+  if (state.manage.metricsPollTimer) {
+    clearInterval(state.manage.metricsPollTimer);
+    state.manage.metricsPollTimer = null;
+  }
+  state.manage.metricsSeries.clear();
+  state.manage.metricsAvailable = true;
+}
+
+async function refreshManageMetrics() {
+  const data = state.manage;
+  const kindAtStart = data.resourceType;
+  const nsAtStart = data.namespace;
+  if (!MANAGE_METRICS_KINDS.includes(kindAtStart) || !data.context || !nsAtStart) return;
+
+  const result = await window.k8sApi.getMetrics(data.kubeconfig, data.context, nsAtStart, kindAtStart);
+  // Kind/namespace may have changed while this request was in flight — drop stale responses.
+  if (data.resourceType !== kindAtStart || data.namespace !== nsAtStart) return;
+
+  if (!result.ok) {
+    data.metricsAvailable = false;
+    if (data.metricsPollTimer) {
+      clearInterval(data.metricsPollTimer);
+      data.metricsPollTimer = null;
+    }
+    renderManageMetricsPane();
+    return;
+  }
+
+  data.metricsAvailable = true;
+  const now = Date.now();
+  for (const row of result.rows) {
+    let series = data.metricsSeries.get(row.name);
+    if (!series) { series = []; data.metricsSeries.set(row.name, series); }
+    series.push({ t: now, cpu: row.cpu, mem: row.memory });
+    if (series.length > MANAGE_METRICS_MAX_POINTS) series.shift();
+  }
+  renderManageMetricsSparklines();
+  if (el.manageMetricsPane.style.display === 'flex') renderManageMetricsPane();
+}
+
+// Draws a filled line chart into `container` from `points` (each mapped through opts.accessor).
+// Reused for both the compact table sparklines (.manage-spark) and the bigger drawer charts (.manage-chart).
+function renderSparkline(container, points, opts) {
+  const { accessor, color } = opts || {};
+  const values = points.map((p) => (accessor ? accessor(p) : p));
+  if (values.length < 2) {
+    container.innerHTML = '';
+    return;
+  }
+  const w = 100, h = 30;
+  const max = Math.max(...values, 1);
+  const stepX = w / (values.length - 1);
+  const coords = values.map((v, i) => [i * stepX, h - (v / max) * h]);
+  const linePath = coords.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L${w},${h} L0,${h} Z`;
+  const stroke = color || 'var(--accent)';
+  container.innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <line x1="0" y1="${h - 0.5}" x2="${w}" y2="${h - 0.5}" stroke="var(--border)" stroke-width="1" />
+      <path d="${areaPath}" fill="${stroke}" fill-opacity="0.15" stroke="none" />
+      <path d="${linePath}" fill="none" stroke="${stroke}" stroke-width="1.5" />
+    </svg>`;
+}
+
+function renderManageMetricsSparklines() {
+  const data = state.manage;
+  el.manageTbody.querySelectorAll('.manage-spark').forEach((node) => {
+    const series = data.metricsSeries.get(node.dataset.row);
+    if (!series || !series.length) return;
+    const metric = node.dataset.metric;
+    renderSparkline(node, series, { accessor: (p) => (metric === 'cpu' ? p.cpu : p.mem) });
+  });
+}
+
+function renderManageMetricsPane() {
+  const data = state.manage;
+  if (!data.metricsAvailable) {
+    el.manageMetricsPane.innerHTML = '<div class="manage-empty">Metrics server not installed or unreachable.</div>';
+    return;
+  }
+  const row = data.selected;
+  if (!row) return;
+  const series = data.metricsSeries.get(row.name) || [];
+  const latest = series[series.length - 1];
+  el.manageMetricsPane.innerHTML = `
+    <div class="manage-chart-block">
+      <div class="manage-chart-header">
+        <span class="manage-chart-title">CPU</span>
+        <span class="manage-chart-value">${latest ? `${Math.round(latest.cpu)}m` : '—'}</span>
+      </div>
+      <div id="manage-chart-cpu" class="manage-chart"></div>
+    </div>
+    <div class="manage-chart-block">
+      <div class="manage-chart-header">
+        <span class="manage-chart-title">Memory</span>
+        <span class="manage-chart-value">${latest ? `${(latest.mem / (1024 ** 2)).toFixed(0)} MiB` : '—'}</span>
+      </div>
+      <div id="manage-chart-mem" class="manage-chart"></div>
+    </div>`;
+  renderSparkline($('manage-chart-cpu'), series, { accessor: (p) => p.cpu });
+  renderSparkline($('manage-chart-mem'), series, { accessor: (p) => p.mem });
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    K8S MANAGE — drawer (detail + pod logs)
    ════════════════════════════════════════════════════════════════════════════ */
@@ -1557,10 +1690,13 @@ function openManageDrawer(kind, row) {
   renderManageDetail(kind, row);
 
   const isPod = kind === 'pods';
+  const isMetricsKind = MANAGE_METRICS_KINDS.includes(kind);
   const logsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="logs"]');
   const execTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="exec"]');
+  const metricsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="metrics"]');
   logsTabBtn.style.display = isPod ? '' : 'none';
   execTabBtn.style.display = isPod ? '' : 'none';
+  metricsTabBtn.style.display = isMetricsKind ? '' : 'none';
   if (isPod) {
     populateManageLogContainerPicker(row.containers || []);
     populateManageExecContainerPicker(row.containers || []);
@@ -1579,7 +1715,7 @@ function closeManageDrawer() {
 el.manageDrawerClose.addEventListener('click', closeManageDrawer);
 
 function renderManageDetail(kind, row) {
-  const cols = MANAGE_COLUMN_DEFS[kind] || MANAGE_COLUMN_DEFS.pods;
+  const cols = (MANAGE_COLUMN_DEFS[kind] || MANAGE_COLUMN_DEFS.pods).filter((c) => !c.spark);
   el.manageDetailPane.innerHTML = cols.map((c) => {
     const val = c.age ? relAge(row[c.key]) : row[c.key];
     return `
@@ -1599,6 +1735,7 @@ function switchManageTab(tab) {
   el.manageDetailPane.style.display = tab === 'detail' ? '' : 'none';
   el.manageLogsPane.style.display = tab === 'logs' ? 'flex' : 'none';
   el.manageExecPane.style.display = tab === 'exec' ? 'flex' : 'none';
+  el.manageMetricsPane.style.display = tab === 'metrics' ? 'flex' : 'none';
   if (tab === 'logs') {
     if (el.manageLogContainer.value) startManageLogs();
   } else {
@@ -1608,6 +1745,9 @@ function switchManageTab(tab) {
     if (el.manageExecContainer.value) startManageExec();
   } else {
     stopManageExec();
+  }
+  if (tab === 'metrics') {
+    renderManageMetricsPane();
   }
 }
 

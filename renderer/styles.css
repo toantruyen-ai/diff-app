@@ -1531,6 +1531,38 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
   font-size: 13px;
 }
 
+.manage-spark { display: inline-block; width: 70px; height: 22px; vertical-align: middle; }
+.manage-spark svg, .manage-chart svg { display: block; width: 100%; height: 100%; }
+
+.manage-metrics-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 16px 20px;
+  overflow: auto;
+}
+
+.manage-chart-block { display: flex; flex-direction: column; gap: 8px; }
+
+.manage-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.manage-chart-title { font-weight: 600; color: var(--text); }
+.manage-chart-value { font-family: var(--font-mono); color: var(--accent); }
+
+.manage-chart {
+  width: 100%;
+  height: 90px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-base);
+}
+
 /* Pod/node status colors */
 .status-pill.manage-status-running { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); border: 1px solid var(--green); }
 .status-pill.manage-status-pending { background: var(--missing-bg); color: var(--missing-text); border: 1px solid var(--missing-border); }

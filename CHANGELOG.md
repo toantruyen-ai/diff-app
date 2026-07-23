@@ -16,6 +16,8 @@
   - `preload.js`: exposes `startExec`/`execWrite`/`execResize`/`stopExec` plus disposer-returning `onExecData`/`onExecExit`, following the same subscribe-before-start pattern as pod logs to avoid dropping the first bytes.
   - `renderer/app.js`: `startManageExec`/`stopManageExec` wire an `xterm.js` `Terminal` + `FitAddon` to the session, with a `ResizeObserver` keeping the PTY size in sync; wired into the same teardown choke point as log streams (tab switch, drawer close, leaving the workspace, app quit).
   - `renderer/vendor/xterm/` — vendored `@xterm/xterm` + `@xterm/addon-fit` browser builds (no bundler in this app); verified via `electron-builder --dir` that they ship inside `app.asar`.
-
-### Planned
-- Phase 3: CPU/memory metrics with hand-drawn SVG sparklines/charts.
+- **K8s Manage (Phase 3)** — CPU/memory metrics with hand-drawn SVG sparklines/charts (no charting library):
+  - Pods and Nodes tables gain live CPU/Memory sparkline columns; the detail drawer gains a "Metrics" tab with a larger CPU chart and Memory chart for the selected resource.
+  - `main.js`: `get-metrics` IPC handler wraps `k8s.Metrics` (`getPodMetrics`/`getNodeMetrics`), parsing CPU (`n`/`u`/`m`/core suffixes) and memory (`Ki`/`Mi`/`Gi`/etc.) into plain millicores/bytes; on any failure — most commonly metrics-server not being installed — it returns `{ok:false, reason:'metrics-server-unavailable', error}` instead of throwing.
+  - `preload.js`: exposes `getMetrics`.
+  - `renderer/app.js`: polls every 10s while viewing Pods/Nodes, keeping a 60-point ring buffer per resource name in `state.manage.metricsSeries`; `renderSparkline()` draws a filled `<path>` line chart into any container and is shared by both the compact table sparklines and the bigger drawer charts. A failed fetch stops the metrics poll and shows a "Metrics server not installed or unreachable" notice in the drawer, without touching the separate resource-list poller. Wired into the same teardown choke point as the resource poller (kind switch, context/namespace change, leaving the workspace).
