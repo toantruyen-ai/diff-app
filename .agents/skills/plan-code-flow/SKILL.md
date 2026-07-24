@@ -34,9 +34,12 @@ The architecture, file mapping, and red lines from `implement-code-flow` apply t
 
 ### Step 4: Design Contracts & Test Strategy
 - Define API contracts up front: input params, return shape `{ ok: true, ... }` / `{ ok: false, error, reason }`,
-  and IPC channel names matching sibling naming conventions (no invented styles).
+  and names — files, functions, constants, IPC channels, preload keys — following the **Naming Conventions (§1b)**
+  in `implement-code-flow` (kebab-case IPC verb-noun ↔ camelCase preload/service 1:1; no invented styles).
 - List the unit tests to write under `tests/unit/<path>/`: success paths, edge cases (null/empty/missing), error/timeout.
 - Confirm no breaking change to existing IPC channels or `window.k8sApi` surface (or call it out explicitly if unavoidable).
+- **Security (§1c)**: for any change touching shell-out, file paths, SQL, Secrets, or new IPC input, plan the controls up front —
+  input validation/allow-list, `execFile` arg-arrays (no shell interpolation), secret redaction, parameterized SQL, curated preload.
 
 ### Step 5: Sequence the Work into Small Steps
 - Break the plan into an ordered, individually-verifiable checklist (each step small enough to test on its own).

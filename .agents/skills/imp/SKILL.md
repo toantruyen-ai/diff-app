@@ -9,7 +9,7 @@ This is a short alias for `implement-code-flow`.
 
 ## Quick Rules:
 1. Locate target file in `src/main/services/` or `src/main/utils/` (< 200 lines).
-2. Design clean API return `{ ok: true/false }`.
+2. Design clean API return `{ ok: true/false }`. **Names follow §1b of `implement-code-flow`**: files `<domain>Service/Handler/Db/Constants.js`; verb-first camelCase functions; `UPPER_SNAKE_CASE` constants; IPC `kebab-case` verb-noun ↔ preload camelCase 1:1 (push subscribers `onXxx`).
 3. Write/update unit test in `tests/unit/`.
-4. Implement code modularly.
+4. Implement code modularly. **Security §1c**: validate renderer input (allow-list identifiers); no shell interpolation (`execFile`/arg-arrays, `shell:false`); redact secrets via `redactSecretData`; parameterized SQL; never expose raw `ipcRenderer`.
 5. Run `npm test` and verify 100% pass before finishing.

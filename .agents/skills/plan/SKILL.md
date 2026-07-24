@@ -11,6 +11,6 @@ This is a short alias for `plan-code-flow`.
 1. Restate the goal; classify as feature / bug / refactor; ask if requirements are ambiguous (no guessing).
 2. Investigate read-only via the IPC path + `serena` symbol tools — never edit files while planning.
 3. Map every change to an exact layer/file (Constants / Utils / DB / Services / IPC / Preload / Renderer / Tests).
-4. Design contracts `{ ok, error, reason }` + IPC channel names; list the `tests/unit/` cases to write.
+4. Design contracts `{ ok, error, reason }` + names per §1b of `implement-code-flow` (kebab-case IPC verb-noun ↔ camelCase preload/service 1:1; no invented styles); plan §1c security controls (validate IPC input, `execFile` no-shell, redact secrets, parameterized SQL, curated preload); list the `tests/unit/` cases to write.
 5. Sequence into small, individually-testable steps (utils → services → IPC → preload → renderer → rebuild); note risks.
 6. Present the plan for approval; write NO code until confirmed, then hand off to `imp` / `fix` / `ref`.

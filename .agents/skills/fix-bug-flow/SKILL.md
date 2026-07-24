@@ -36,7 +36,9 @@ building something **new**. The architecture, file mapping, and red lines from `
   - Use `withTimeout` for external/cluster calls; reuse existing helpers.
   - Mutations stay on the audit/write-gate path; streaming/DB handles keep a registered teardown in `src/main/index.js`.
   - No magic values — use `k8sConstants.js`.
+  - Honor §1c security: don't introduce shell interpolation, unvalidated IPC input, un-redacted secrets, or string-built SQL while fixing.
 - Do NOT refactor unrelated code or "improve" things beyond the bug. Scope creep hides regressions.
+- If the bug **is** a security issue (injection, path traversal, leaked secret, ungated mutation), apply the §1c control as the fix and add a regression test that proves the exploit is blocked.
 
 ### Step 5: Verify
 - Confirm the new test now passes (green).

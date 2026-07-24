@@ -35,6 +35,9 @@ The architecture, file mapping, and red lines from `implement-code-flow` still a
 - One transformation at a time (extract function, split file, rename symbol, dedupe, move to util/constant).
 - Prefer `serena` symbol tools (`find_symbol`, `find_referencing_symbols`, `rename_symbol`, `replace_symbol_body`)
   for safe renames/moves so all references update together.
+- Any rename must land on the **Naming Conventions (§1b)** in `implement-code-flow` (file suffixes, verb-first
+  camelCase functions, `UPPER_SNAKE_CASE` constants, kebab-case IPC ↔ camelCase preload 1:1). Renaming a public
+  IPC channel or `window.k8sApi` key is a **contract change** (§Step 3), not a refactor — stop and switch skills.
 - Preserve all `implement-code-flow` red lines:
   - Keep files single-responsibility and < 200 lines; move pure helpers to `src/main/utils/`, magic values to `k8sConstants.js`.
   - Do NOT remove `withTimeout`, audit/write-gate paths, or teardown registrations in `src/main/index.js`.
