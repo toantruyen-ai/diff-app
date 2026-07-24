@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld('k8sApi', {
   getResourceVersions: (ref, ctx, ns, kind, name) => ipcRenderer.invoke('get-resource-versions', ref, ctx, ns, kind, name),
   getVersionYaml: (id) => ipcRenderer.invoke('get-version-yaml', id),
   restoreResourceVersion: (ref, ctx, ns, kind, name, id, crdMeta) => ipcRenderer.invoke('restore-resource-version', ref, ctx, ns, kind, name, id, crdMeta),
+  getDeletedResources: (ref, ctx, ns) => ipcRenderer.invoke('get-deleted-resources', ref, ctx, ns),
+  restoreDeletedResource: (ref, ctx, ns, kind, name, id, crdMeta) => ipcRenderer.invoke('restore-deleted-resource', ref, ctx, ns, kind, name, id, crdMeta),
   setEventRetention: (params) => ipcRenderer.invoke('set-event-retention', params),
   clearEventDb: () => ipcRenderer.invoke('clear-event-db'),
   getLocalEvents: (params) => ipcRenderer.invoke('get-local-events', params),

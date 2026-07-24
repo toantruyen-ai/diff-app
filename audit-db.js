@@ -215,6 +215,29 @@ async function getVersionYaml(id) {
   return result.recordset[0] || null;
 }
 
+async function getDeletedResources({ clusterId, namespace, limit }) {
+  if (!pool) return [];
+  if (!sql) sql = require('mssql');
+  const req = pool.request();
+  req.input('cluster_id', sql.NVarChar(64), clusterId);
+  req.input('namespace', sql.NVarChar(256), namespace || '');
+  const result = await req.query(`
+    WITH latest AS (
+      SELECT id, namespace, kind, name, action, edit_version, updated_by, updated_at,
+             ROW_NUMBER() OVER (PARTITION BY namespace, kind, name ORDER BY updated_at DESC) rn
+      FROM k8senvdiff_audit
+      WHERE cluster_id = @cluster_id
+        AND (@namespace = '' OR namespace = @namespace)
+    )
+    SELECT id, namespace, kind, name, edit_version, updated_by, updated_at
+    FROM latest
+    WHERE rn = 1 AND action = 'delete'
+    ORDER BY updated_at DESC
+    OFFSET 0 ROWS FETCH NEXT ${Math.min(limit || 100, 200)} ROWS ONLY
+  `);
+  return result.recordset;
+}
+
 async function nextEditVersion({ clusterId, namespace, kind, name }) {
   if (!pool) return 1;
   if (!sql) sql = require('mssql');
@@ -256,6 +279,7 @@ module.exports = {
   insertAudit,
   getVersions,
   getVersionYaml,
+  getDeletedResources,
   nextEditVersion,
   status,
   close,

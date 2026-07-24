@@ -555,6 +555,17 @@ const ALL_NAMESPACES = '__all__';
 // These ignore whatever namespace is selected — always listed/read cluster-wide.
 const MANAGE_CLUSTER_SCOPED_KINDS = ['nodes', 'pvs', 'namespaces', 'clusterroles', 'clusterrolebindings', 'storageclasses'];
 
+// Kinds eligible for "restore a deleted resource" (Recycle Bin). Deliberately excludes
+// owner-managed/infra kinds where recreating makes no sense (pods, replicasets — their
+// parent recreates them; events — ephemeral; nodes/pvs — cluster/cloud-provisioned) and
+// secrets (values are stored redacted at delete time and cannot be recovered).
+const RESTORABLE_KINDS = new Set([
+  'deployments', 'statefulsets', 'daemonsets', 'services', 'ingresses', 'configmaps',
+  'jobs', 'cronjobs', 'pvcs', 'hpas', 'namespaces',
+  'serviceaccounts', 'roles', 'rolebindings', 'clusterroles', 'clusterrolebindings',
+  'networkpolicies', 'storageclasses', 'resourcequotas', 'limitranges',
+]);
+
 // ── K8s Manage: real-time watch (Phase 16) ───────────────────────────────────
 // Only the high-churn workload-controller kinds get a real k8s watch stream — these are the
 // resources that change *during normal operational activity* (a rollout cascades through
@@ -1435,7 +1446,9 @@ ipcMain.handle('get-resource-yaml', async (_e, ref, contextName, namespace, kind
       delete obj.metadata.managedFields;
       delete obj.metadata.uid;
       delete obj.metadata.creationTimestamp;
-      delete obj.metadata.resourceVersion;
+      // Edit mode needs resourceVersion preserved for optimistic-concurrency on apply — only the
+      // read-only view strips it as declutter.
+      if (!(opts && opts.forEdit)) delete obj.metadata.resourceVersion;
       if (obj.metadata.annotations) {
         delete obj.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];
       }
@@ -1682,7 +1695,7 @@ ipcMain.handle('apply-resource-yaml', async (_e, ref, contextName, namespace, ki
     let editVersion = 0;
     if (auditDb.status().connected) {
       try { oldObj = await readManageObject(ref, contextName, namespace, kind, name); } catch { /* best-effort */ }
-      const clusterId = auditDb.getClusterId(ref, contextName);
+      const clusterId = resolveClusterId(ref, contextName);
       const dbNext = await auditDb.nextEditVersion({ clusterId, namespace, kind, name });
       const currentAnno = parseInt(oldObj?.metadata?.annotations?.['k8senvdiff-edit-resource-version'] || '0', 10);
       editVersion = Math.max(dbNext, currentAnno + 1);
@@ -1787,7 +1800,7 @@ ipcMain.handle('apply-custom-resource-yaml', async (_e, ref, contextName, namesp
           : await customApi.getClusterCustomObject(group, version, plural, name);
         oldObj = oldRes.body;
       } catch { /* best-effort */ }
-      const clusterId = auditDb.getClusterId(ref, contextName);
+      const clusterId = resolveClusterId(ref, contextName);
       const dbNext = await auditDb.nextEditVersion({ clusterId, namespace, kind: crdKind, name });
       const currentAnno = parseInt(oldObj?.metadata?.annotations?.['k8senvdiff-edit-resource-version'] || '0', 10);
       editVersion = Math.max(dbNext, currentAnno + 1);
@@ -1866,10 +1879,85 @@ async function readManageObject(ref, contextName, namespace, kind, name) {
   return res.body;
 }
 
+async function createManageObject(ref, contextName, namespace, kind, parsed) {
+  const kc = buildKubeConfig(ref, contextName);
+  const coreApi = kc.makeApiClient(k8s.CoreV1Api);
+  const appsApi = kc.makeApiClient(k8s.AppsV1Api);
+  const batchApi = kc.makeApiClient(k8s.BatchV1Api);
+  const networkingApi = kc.makeApiClient(k8s.NetworkingV1Api);
+  const autoscalingApi = kc.makeApiClient(k8s.AutoscalingV2Api);
+  const rbacApi = kc.makeApiClient(k8s.RbacAuthorizationV1Api);
+  const storageApi = kc.makeApiClient(k8s.StorageV1Api);
+
+  let res;
+  switch (kind) {
+    case 'deployments':  res = await appsApi.createNamespacedDeployment(namespace, parsed); break;
+    case 'statefulsets': res = await appsApi.createNamespacedStatefulSet(namespace, parsed); break;
+    case 'daemonsets':   res = await appsApi.createNamespacedDaemonSet(namespace, parsed); break;
+    case 'services':     res = await coreApi.createNamespacedService(namespace, parsed); break;
+    case 'ingresses':    res = await networkingApi.createNamespacedIngress(namespace, parsed); break;
+    case 'configmaps':   res = await coreApi.createNamespacedConfigMap(namespace, parsed); break;
+    case 'jobs':         res = await batchApi.createNamespacedJob(namespace, parsed); break;
+    case 'cronjobs':     res = await batchApi.createNamespacedCronJob(namespace, parsed); break;
+    case 'pvcs':         res = await coreApi.createNamespacedPersistentVolumeClaim(namespace, parsed); break;
+    case 'hpas':         res = await autoscalingApi.createNamespacedHorizontalPodAutoscaler(namespace, parsed); break;
+    case 'namespaces':   res = await coreApi.createNamespace(parsed); break;
+    case 'serviceaccounts':     res = await coreApi.createNamespacedServiceAccount(namespace, parsed); break;
+    case 'roles':               res = await rbacApi.createNamespacedRole(namespace, parsed); break;
+    case 'rolebindings':        res = await rbacApi.createNamespacedRoleBinding(namespace, parsed); break;
+    case 'clusterroles':        res = await rbacApi.createClusterRole(parsed); break;
+    case 'clusterrolebindings': res = await rbacApi.createClusterRoleBinding(parsed); break;
+    case 'networkpolicies':     res = await networkingApi.createNamespacedNetworkPolicy(namespace, parsed); break;
+    case 'storageclasses':      res = await storageApi.createStorageClass(parsed); break;
+    case 'resourcequotas':      res = await coreApi.createNamespacedResourceQuota(namespace, parsed); break;
+    case 'limitranges':         res = await coreApi.createNamespacedLimitRange(namespace, parsed); break;
+    default: return null;
+  }
+  return res.body;
+}
+
+// Strips server-managed / binding fields from a stored manifest before recreating it via POST —
+// the object no longer exists, so resourceVersion/uid are stale and ownerReferences would point
+// at a (possibly gone) parent, causing the API server to garbage-collect the recreated object
+// immediately.
+function stripForRecreate(parsed) {
+  if (parsed.metadata) {
+    delete parsed.metadata.resourceVersion;
+    delete parsed.metadata.uid;
+    delete parsed.metadata.creationTimestamp;
+    delete parsed.metadata.generation;
+    delete parsed.metadata.managedFields;
+    delete parsed.metadata.selfLink;
+    delete parsed.metadata.ownerReferences;
+    if (parsed.metadata.annotations) {
+      delete parsed.metadata.annotations['k8senvdiff-edit-resource-version'];
+      delete parsed.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];
+    }
+  }
+  delete parsed.status;
+  return parsed;
+}
+
+// Audit clusterId must stay stable across app restarts, regardless of how the kubeconfig was
+// obtained. The raw `ref` isn't reliable for that: an AKS-picked cluster's `ref` is an in-memory-
+// only sequential id (`aksKcStore`, above) that's regenerated from scratch every time the process
+// starts — hashing it directly would silently orphan every previously-written audit row on each
+// restart. The cluster's own API server URL is what's actually stable no matter the source, so
+// resolve that instead of trusting the caller-supplied ref.
+function resolveClusterId(ref, contextName) {
+  let identity = ref;
+  try {
+    const kc = buildKubeConfig(ref, contextName);
+    const cluster = kc.getCurrentCluster();
+    if (cluster && cluster.server) identity = cluster.server;
+  } catch { /* fall back to raw ref rather than failing audit entirely */ }
+  return auditDb.getClusterId(identity, contextName);
+}
+
 // Best-effort audit recording — never throws, returns warning string on failure.
 async function recordAudit({ ref, contextName, namespace, kind, name, action, oldObj, newObj, editVersion }) {
   try {
-    const clusterId = auditDb.getClusterId(ref, contextName);
+    const clusterId = resolveClusterId(ref, contextName);
     const updatedBy = auditDb.getAzureIdentity();
     const oldYaml = oldObj ? k8s.dumpYaml(kind === 'secrets' ? redactSecretData(oldObj) : oldObj) : null;
     const newYaml = newObj ? k8s.dumpYaml(kind === 'secrets' ? redactSecretData(newObj) : newObj) : null;
@@ -1926,7 +2014,7 @@ ipcMain.handle('audit-db-status', async () => {
 ipcMain.handle('get-resource-versions', async (_e, ref, contextName, namespace, kind, name) => {
   console.log('[main-ipc] get-resource-versions called:', { ref, contextName, namespace, kind, name });
   try {
-    const clusterId = auditDb.getClusterId(ref, contextName);
+    const clusterId = resolveClusterId(ref, contextName);
     console.log('[main-ipc] Computed clusterId:', clusterId);
     const rows = await auditDb.getVersions({ clusterId, namespace, kind, name });
     console.log('[main-ipc] getVersions returned rows count:', rows ? rows.length : 0);
@@ -1944,6 +2032,69 @@ ipcMain.handle('get-version-yaml', async (_e, id) => {
     return { ok: true, row };
   } catch (e) {
     return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-deleted-resources', async (_e, ref, contextName, namespace) => {
+  try {
+    const clusterId = resolveClusterId(ref, contextName);
+    const rows = await auditDb.getDeletedResources({ clusterId, namespace });
+    return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('restore-deleted-resource', async (_e, ref, contextName, namespace, kind, name, id, crdMeta) => {
+  if (!auditDb.status().connected) return { ok: false, error: 'Audit DB not connected', kind: 'forbidden' };
+  if (!crdMeta && kind === 'secrets') {
+    return { ok: false, error: 'Secrets cannot be restored — their values were redacted at delete time and were never saved.', kind: 'validation' };
+  }
+  if (!crdMeta && !RESTORABLE_KINDS.has(kind)) {
+    return { ok: false, error: `Restore not supported for kind: ${kind}`, kind: 'validation' };
+  }
+  try {
+    // 1. Fetch the deleted version's YAML
+    const versionRow = await auditDb.getVersionYaml(id);
+    if (!versionRow) return { ok: false, error: 'Version not found' };
+    const targetYaml = versionRow.old_yaml;
+    if (!targetYaml) return { ok: false, error: 'No YAML data in this version' };
+
+    // 2. Parse and strip server-managed fields so the recreate isn't rejected or instantly GC'd
+    let parsed = k8s.loadYaml(targetYaml);
+    if (!parsed || typeof parsed !== 'object') return { ok: false, error: 'Invalid YAML in version', kind: 'parse' };
+    parsed = stripForRecreate(parsed);
+
+    // 3. Recreate
+    let newObj;
+    if (crdMeta) {
+      const kc = buildKubeConfig(ref, contextName);
+      const customApi = kc.makeApiClient(k8s.CustomObjectsApi);
+      const res = crdMeta.namespaced
+        ? await customApi.createNamespacedCustomObject(crdMeta.group, crdMeta.version, namespace, crdMeta.plural, parsed)
+        : await customApi.createClusterCustomObject(crdMeta.group, crdMeta.version, crdMeta.plural, parsed);
+      newObj = res.body;
+    } else {
+      newObj = await createManageObject(ref, contextName, namespace, kind, parsed);
+      if (!newObj) return { ok: false, error: `Restore not supported for kind: ${kind}`, kind: 'validation' };
+    }
+
+    // 4. Record audit
+    const clusterId = resolveClusterId(ref, contextName);
+    const editVersion = await auditDb.nextEditVersion({ clusterId, namespace, kind, name });
+    const auditWarning = await recordAudit({
+      ref, contextName, namespace, kind, name, action: 'restore',
+      oldObj: null, newObj, editVersion,
+    });
+
+    return { ok: true, auditWarning };
+  } catch (e) {
+    if (e.statusCode === 409) {
+      return { ok: false, error: 'A resource with this name already exists — delete it first, or it was already restored.', kind: 'conflict' };
+    }
+    if (e.statusCode === 403) return { ok: false, error: e.body?.message || e.message, kind: 'forbidden' };
+    if (e.statusCode === 400 || e.statusCode === 422) return { ok: false, error: e.body?.message || e.message, kind: 'invalid' };
+    return { ok: false, error: e.message, kind: 'error' };
   }
 });
 
@@ -1978,7 +2129,7 @@ ipcMain.handle('restore-resource-version', async (_e, ref, contextName, namespac
     parsed.metadata.resourceVersion = liveObj.metadata.resourceVersion;
 
     // 4. Bump audit annotation
-    const clusterId = auditDb.getClusterId(ref, contextName);
+    const clusterId = resolveClusterId(ref, contextName);
     const dbNext = await auditDb.nextEditVersion({ clusterId, namespace, kind, name });
     const currentAnno = parseInt(liveObj.metadata?.annotations?.['k8senvdiff-edit-resource-version'] || '0', 10);
     const next = Math.max(dbNext, currentAnno + 1);
@@ -2113,7 +2264,9 @@ ipcMain.handle('get-custom-resource-yaml', async (_e, ref, contextName, namespac
       delete obj.metadata.managedFields;
       delete obj.metadata.uid;
       delete obj.metadata.creationTimestamp;
-      delete obj.metadata.resourceVersion;
+      // Edit mode needs resourceVersion preserved for optimistic-concurrency on apply — only the
+      // read-only view strips it as declutter.
+      if (!(opts && opts.forEdit)) delete obj.metadata.resourceVersion;
       if (obj.metadata.annotations) {
         delete obj.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];
       }

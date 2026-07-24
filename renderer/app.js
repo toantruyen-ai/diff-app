@@ -248,6 +248,11 @@ const el = {
   manageOverviewPane:   $('manage-overview-pane'),
   manageCrdFilter:      $('manage-crd-filter'),
   manageCrdList:        $('manage-crd-list'),
+  manageRecyclebinPane:       $('manage-recyclebin-pane'),
+  manageRecyclebinList:       $('manage-recyclebin-list'),
+  manageRecyclebinYaml:       $('manage-recyclebin-yaml'),
+  manageRecyclebinYamlClose:  $('manage-recyclebin-yaml-close'),
+  manageRecyclebinYamlOutput: $('manage-recyclebin-yaml-output'),
 
   // Audit
   manageWriteBadge:     $('manage-write-badge'),
@@ -1868,6 +1873,7 @@ async function loadManageContexts() {
       data.context = contexts[0];
       loadManageCrds();
       if (data.resourceType === 'overview') startManageOverviewPolling();
+      else if (data.resourceType === 'recyclebin') loadRecycleBin();
       await loadManageNamespaces();
     }
   } catch (e) {
@@ -1893,7 +1899,9 @@ async function loadManageNamespaces() {
     if (defaultNs) {
       el.manageNamespace.value = defaultNs;
       data.namespace = defaultNs;
-      if (data.resourceType !== 'overview') {
+      if (data.resourceType === 'recyclebin') {
+        loadRecycleBin();
+      } else if (data.resourceType !== 'overview') {
         startManageLiveUpdates(data.resourceType, data.namespace);
         startManageMetricsPolling();
       }
@@ -1923,12 +1931,15 @@ el.manageContext.addEventListener('change', async () => {
   el.manageCrdList.innerHTML = '';
   if (data.resourceType === 'overview') {
     el.manageOverviewPane.innerHTML = '';
+  } else if (data.resourceType === 'recyclebin') {
+    el.manageRecyclebinList.innerHTML = '';
   } else {
     renderManageTable(data.resourceType, []);
   }
   if (data.context) {
     loadManageCrds();
     if (data.resourceType === 'overview') startManageOverviewPolling();
+    else if (data.resourceType === 'recyclebin') loadRecycleBin();
     await loadManageNamespaces();
   }
   syncEventCaptureToBackend();
@@ -1942,7 +1953,9 @@ el.manageNamespace.addEventListener('change', () => {
   stopManageMetricsPolling();
   _clearManageRowsCache();
   closeManageDrawer();
-  if (data.namespace) {
+  if (data.resourceType === 'recyclebin') {
+    loadRecycleBin();
+  } else if (data.namespace) {
     startManageLiveUpdates(data.resourceType, data.namespace);
     startManageMetricsPolling();
   } else {
@@ -1955,7 +1968,7 @@ let _manageSearchTimer;
 el.manageSearch.addEventListener('input', () => {
   clearTimeout(_manageSearchTimer);
   _manageSearchTimer = setTimeout(() => {
-    if (state.manage.resourceType !== 'overview') renderManageTable(state.manage.resourceType, state.manage.rows);
+    if (!isManageSpecialView(state.manage.resourceType)) renderManageTable(state.manage.resourceType, state.manage.rows);
   }, 150);
 });
 el.manageBtnRefresh.addEventListener('click', () => refreshManageResources());
@@ -2074,7 +2087,7 @@ function applyMenuVisibility() {
   // Show/hide individual nav items
   el.manageSidebar.querySelectorAll('.manage-nav-item[data-kind]').forEach((btn) => {
     const kind = btn.dataset.kind;
-    if (kind === 'overview') return; // Overview is always visible
+    if (isManageSpecialView(kind)) return; // Overview / Recycle Bin are always visible
     btn.style.display = vis[kind] ? '' : 'none';
   });
 
@@ -2096,7 +2109,7 @@ function applyMenuVisibility() {
 
   // If the currently active kind was just hidden → redirect to overview
   const data = state.manage;
-  if (data.mode === 'kind' && data.resourceType !== 'overview') {
+  if (data.mode === 'kind' && !isManageSpecialView(data.resourceType)) {
     if (!vis[data.resourceType]) {
       selectManageKind('overview');
     }
@@ -2196,7 +2209,7 @@ el.manageSettingMetrics.addEventListener('change', () => {
       metricsTabBtn.style.display = isMetricsKind ? '' : 'none';
     }
   }
-  if (state.manage.resourceType !== 'overview') {
+  if (!isManageSpecialView(state.manage.resourceType)) {
     renderManageTable(state.manage.resourceType, state.manage.rows);
   }
   saveManageSettings();
@@ -2213,6 +2226,8 @@ el.manageSettingAutoRefresh.addEventListener('change', () => {
     if (state.manage.context && state.manage.namespace) {
       if (state.manage.resourceType === 'overview') {
         startManageOverviewPolling();
+      } else if (state.manage.resourceType === 'recyclebin') {
+        loadRecycleBin();
       } else {
         startManagePolling();
         startManageMetricsPolling();
@@ -2297,6 +2312,9 @@ function updateWriteGate() {
     renderManageDrawerActions(kind, data.selected);
     renderManageYamlEditGate();
   }
+  // Refresh Recycle Bin if it's the active view — its "Enable Audit…" empty state and
+  // Restore-button disabled state both depend on this gate.
+  if (data.resourceType === 'recyclebin') loadRecycleBin();
 }
 
 function showAuditStatus(text, type) {
@@ -2782,7 +2800,7 @@ function updateManageKindTitle() {
   if (data.mode === 'crd' && data.activeCrd) {
     el.manageKindTitle.textContent = `${data.activeCrd.kind} · ${data.activeCrd.group || '(core)'}`;
     el.manageKindTitle.style.display = '';
-  } else if (data.resourceType && data.resourceType !== 'overview') {
+  } else if (data.resourceType && !isManageSpecialView(data.resourceType)) {
     const activeBtn = el.manageSidebar.querySelector('.manage-nav-item.active');
     el.manageKindTitle.textContent = activeBtn ? activeBtn.textContent.trim() : (MANAGE_KIND_LABEL_PLURAL[data.resourceType] || data.resourceType);
     el.manageKindTitle.style.display = '';
@@ -2791,8 +2809,39 @@ function updateManageKindTitle() {
   }
 }
 
+// "Special" sidebar views (Overview, Recycle Bin) aren't a real resource kind — they don't poll
+// the resource-listing endpoints, have no table, and are exempt from the per-kind menu-visibility
+// toggle (always shown).
+function isManageSpecialView(resourceType) {
+  return resourceType === 'overview' || resourceType === 'recyclebin';
+}
+
 function selectManageKind(kind) {
   const data = state.manage;
+
+  if (kind === 'recyclebin') {
+    if (data.mode === 'kind' && data.resourceType === 'recyclebin') return;
+    data.mode = 'kind';
+    data.activeCrd = null;
+    data.resourceType = 'recyclebin';
+    data.rows = [];
+    clearManageSelection();
+    el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === 'recyclebin'));
+    el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
+    closeManageDrawer();
+    stopManageOverviewPolling();
+    stopManagePolling();
+    stopManageWatch();
+    stopManageMetricsPolling();
+    el.manageOverviewPane.style.display = 'none';
+    el.manageTableWrap.style.display = 'none';
+    el.manageRecyclebinPane.style.display = 'flex';
+    el.manageRecyclebinYaml.style.display = 'none';
+    el.manageRecyclebinList.style.display = '';
+    updateManageKindTitle();
+    loadRecycleBin();
+    return;
+  }
 
   if (kind === 'overview') {
     if (data.mode === 'kind' && data.resourceType === 'overview') return;
@@ -2808,6 +2857,7 @@ function selectManageKind(kind) {
     stopManageWatch();
     stopManageMetricsPolling();
     el.manageTableWrap.style.display = 'none';
+    el.manageRecyclebinPane.style.display = 'none';
     el.manageOverviewPane.style.display = 'flex';
     updateManageKindTitle();
     startManageOverviewPolling();
@@ -2822,6 +2872,7 @@ function selectManageKind(kind) {
   el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === kind));
   el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
   el.manageOverviewPane.style.display = 'none';
+  el.manageRecyclebinPane.style.display = 'none';
   el.manageTableWrap.style.display = '';
   updateManageKindTitle();
   closeManageDrawer();
@@ -3185,6 +3236,7 @@ let _manageResourceGen = 0;
 async function refreshManageResources() {
   const data = state.manage;
   if (data.mode === 'crd' && data.activeCrd) return refreshManageCustomResources();
+  if (data.resourceType === 'recyclebin') return loadRecycleBin();
   if (!data.context || !data.namespace) return;
   const gen = ++_manageResourceGen;
   const kindAtStart = data.resourceType;
@@ -3590,6 +3642,7 @@ function selectManageCrd(crd) {
   el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.remove('active'));
   renderManageCrdList(el.manageCrdFilter.value); // re-render so the CRD's group is force-expanded and highlighted
   el.manageOverviewPane.style.display = 'none';
+  el.manageRecyclebinPane.style.display = 'none';
   el.manageTableWrap.style.display = '';
   updateManageKindTitle();
   closeManageDrawer();
@@ -4969,6 +5022,150 @@ async function handleHistoryRestore(id, kind, namespace, name, crdMeta) {
 
   refreshManageResources();
   loadManageHistory(); // reload history to show new entry
+}
+
+/* ── K8s Manage: Recycle Bin (restore deleted resources) ──────────────────── */
+
+// Kinds recreated via a CREATE call in main.js — mirrors main.js's RESTORABLE_KINDS. Anything
+// not in this set (pods, replicasets, events, nodes, pvs — owner-managed/infra kinds where
+// recreating is meaningless) never gets a Restore button. Secrets are excluded separately below
+// since their values are redacted at delete time and can't be recovered.
+const RECYCLEBIN_RESTORABLE_KINDS = new Set([
+  'deployments', 'statefulsets', 'daemonsets', 'services', 'ingresses', 'configmaps',
+  'jobs', 'cronjobs', 'pvcs', 'hpas', 'namespaces',
+  'serviceaccounts', 'roles', 'rolebindings', 'clusterroles', 'clusterrolebindings',
+  'networkpolicies', 'storageclasses', 'resourcequotas', 'limitranges',
+]);
+
+// A deleted resource's `kind` column is either one of our internal keys (built-ins, e.g.
+// "configmaps") or the CRD's actual Kubernetes Kind string (e.g. "Middleware") — this is how
+// `recordAudit` stores it in both cases (main.js). Distinguish by checking our known key set.
+function isBuiltinManageKind(kind) {
+  return Object.prototype.hasOwnProperty.call(MANAGE_KIND_LABEL_PLURAL, kind);
+}
+
+// Best-effort CRD lookup by Kind label alone (no group/version to disambiguate) — the same
+// limitation already exists in the History tab's getResourceVersions call, since the audit trail
+// only ever stored the plain kind string for CRDs.
+function findCrdMetaByKind(kind) {
+  return state.manage.crds.find((c) => c.kind === kind) || null;
+}
+
+async function loadRecycleBin() {
+  const data = state.manage;
+  if (!data.auditConnected) {
+    el.manageRecyclebinList.innerHTML = '<div class="manage-empty">Enable Audit in Settings to view deleted resources</div>';
+    return;
+  }
+  if (!data.context) {
+    el.manageRecyclebinList.innerHTML = '<div class="manage-empty">Select a context to view deleted resources</div>';
+    return;
+  }
+
+  el.manageRecyclebinList.innerHTML = '<div class="manage-empty">Loading…</div>';
+  const contextAtStart = data.context;
+  const rawNamespaceAtStart = data.namespace;
+  const namespaceAtStart = rawNamespaceAtStart && rawNamespaceAtStart !== MANAGE_ALL_NAMESPACES ? rawNamespaceAtStart : '';
+
+  const result = await window.k8sApi.getDeletedResources(data.kubeconfig, contextAtStart, namespaceAtStart);
+  if (data.context !== contextAtStart || data.namespace !== rawNamespaceAtStart || data.resourceType !== 'recyclebin') return; // stale
+
+  if (!result.ok) {
+    el.manageRecyclebinList.innerHTML = `<div class="manage-empty">Error: ${escHtml(result.error)}</div>`;
+    return;
+  }
+  if (result.rows.length === 0) {
+    el.manageRecyclebinList.innerHTML = '<div class="manage-empty">No deleted resources found</div>';
+    return;
+  }
+  renderRecycleBinList(result.rows);
+}
+
+function renderRecycleBinList(rows) {
+  const data = state.manage;
+  el.manageRecyclebinList.innerHTML = rows.map((r) => {
+    const ts = new Date(r.updated_at).toLocaleString();
+    const isSecret = r.kind === 'secrets';
+    const isBuiltin = isBuiltinManageKind(r.kind);
+    const restorable = isSecret ? false : (isBuiltin ? RECYCLEBIN_RESTORABLE_KINDS.has(r.kind) : true);
+    let restoreTitle = '';
+    if (isSecret) restoreTitle = 'Secret values were redacted at delete time and cannot be recovered';
+    else if (!restorable) restoreTitle = `Restore not supported for kind: ${r.kind}`;
+    else if (!data.writeUnlocked) restoreTitle = 'Enable Audit in Settings to unlock write actions';
+    const restoreDisabled = (!data.writeUnlocked || !restorable) ? ' disabled' : '';
+    const kindLabel = isBuiltin ? (MANAGE_KIND_LABEL_PLURAL[r.kind] || r.kind) : r.kind;
+    return `<div class="manage-history-row" data-id="${r.id}">
+      <span class="manage-recyclebin-kind">${escHtml(kindLabel)}</span>
+      <span class="manage-recyclebin-name">${escHtml(r.namespace ? `${r.namespace}/${r.name}` : r.name)}</span>
+      <span class="manage-history-meta">deleted by ${escHtml(r.updated_by || 'unknown')} · ${ts}</span>
+      <div class="manage-history-actions">
+        <button class="btn btn-xs btn-ghost" data-recyclebin-view="${r.id}">View YAML</button>
+        <button class="btn btn-xs btn-ghost" data-recyclebin-restore="${r.id}" title="${escHtml(restoreTitle)}"${restoreDisabled}>Restore</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.manageRecyclebinList.querySelectorAll('[data-recyclebin-view]').forEach((btn) => {
+    const row = rows.find((r) => r.id === btn.dataset.recyclebinView);
+    btn.addEventListener('click', () => showRecycleBinYaml(row));
+  });
+  el.manageRecyclebinList.querySelectorAll('[data-recyclebin-restore]').forEach((btn) => {
+    if (btn.disabled) return;
+    const row = rows.find((r) => r.id === btn.dataset.recyclebinRestore);
+    btn.addEventListener('click', () => handleRestoreDeleted(row));
+  });
+}
+
+async function showRecycleBinYaml(row) {
+  const result = await window.k8sApi.getVersionYaml(row.id);
+  el.manageRecyclebinList.style.display = 'none';
+  el.manageRecyclebinYaml.style.display = 'flex';
+  if (!result.ok) {
+    el.manageRecyclebinYamlOutput.textContent = `Error: ${result.error}`;
+    return;
+  }
+  const yaml = cleanYamlForDiff(result.row.old_yaml || '');
+  el.manageRecyclebinYamlOutput.innerHTML = highlightYaml(yaml);
+}
+
+el.manageRecyclebinYamlClose.addEventListener('click', () => {
+  el.manageRecyclebinYaml.style.display = 'none';
+  el.manageRecyclebinList.style.display = '';
+});
+
+async function handleRestoreDeleted(row) {
+  const isBuiltin = isBuiltinManageKind(row.kind);
+  const crdMeta = isBuiltin ? null : findCrdMetaByKind(row.kind);
+  if (!isBuiltin && !crdMeta) {
+    alert(`Can't restore: CRD "${row.kind}" is not currently installed/discovered on this cluster.`);
+    return;
+  }
+
+  const { ok } = await showManageConfirm({
+    title: 'Restore this deleted resource?',
+    body: `This recreates "${row.name}" from its last saved manifest before deletion. If a resource with this name already exists, restore will fail.`,
+    confirmLabel: 'Restore',
+  });
+  if (!ok) return;
+
+  const data = state.manage;
+  const result = await window.k8sApi.restoreDeletedResource(
+    data.kubeconfig, data.context, row.namespace, row.kind, row.name, row.id,
+    crdMeta ? { group: crdMeta.group, version: crdMeta.version, plural: crdMeta.plural, namespaced: crdMeta.namespaced } : null
+  );
+
+  if (!result.ok) {
+    alert(`Restore failed: ${result.error}`);
+    return;
+  }
+  if (result.auditWarning) {
+    console.warn('[audit] Restore audit warning:', result.auditWarning);
+  }
+
+  loadRecycleBin();
+  if (data.resourceType === row.kind || (data.mode === 'crd' && data.activeCrd?.kind === row.kind)) {
+    refreshManageResources();
+  }
 }
 
 /* ── Auto-update ─────────────────────────────────────────────────────────── */

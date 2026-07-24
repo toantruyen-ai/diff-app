@@ -472,6 +472,7 @@
       <aside id="manage-sidebar" class="manage-sidebar">
         <div class="manage-sidebar-header">
           <button class="manage-nav-item active" data-kind="overview">Overview</button>
+          <button class="manage-nav-item" data-kind="recyclebin">♻️ Recycle Bin</button>
           <button id="manage-settings-btn" class="manage-settings-btn" title="Settings">⚙️</button>
           <span id="manage-write-badge" class="manage-write-badge" title="Read-only — enable Audit in Settings to unlock write actions">🔒 Read-only</span>
         </div>
@@ -632,6 +633,20 @@
         </div>
 
         <div id="manage-overview-pane" class="manage-overview-pane" style="display:none"></div>
+
+        <div id="manage-recyclebin-pane" class="manage-recyclebin-pane" style="display:none">
+          <div class="manage-recyclebin-header">
+            <h3>Recycle Bin</h3>
+            <p class="manage-recyclebin-sub">Deleted resources recorded in the audit trail for this cluster/namespace. Restore recreates the resource from its last saved manifest.</p>
+          </div>
+          <div id="manage-recyclebin-list" class="manage-recyclebin-list"></div>
+          <div id="manage-recyclebin-yaml" class="manage-history-diff" style="display:none">
+            <div class="manage-history-diff-toolbar">
+              <button id="manage-recyclebin-yaml-close" class="btn btn-xs btn-ghost">← Back to list</button>
+            </div>
+            <pre id="manage-recyclebin-yaml-output" class="manage-history-diff-output"></pre>
+          </div>
+        </div>
 
         <div id="manage-table-wrap" class="sdr-table-wrap">
           <table class="sdr-table">
