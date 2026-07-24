@@ -13,4 +13,4 @@ This is a short alias for `plan-code-flow`.
 3. Map every change to an exact layer/file (Constants / Utils / DB / Services / IPC / Preload / Renderer / Tests).
 4. Design contracts `{ ok, error, reason }` + names per §1b of `implement-code-flow` (kebab-case IPC verb-noun ↔ camelCase preload/service 1:1; no invented styles); plan §1c security controls (validate IPC input, `execFile` no-shell, redact secrets, parameterized SQL, curated preload); list the `tests/unit/` cases to write.
 5. Sequence into small, individually-testable steps (utils → services → IPC → preload → renderer → rebuild); note risks.
-6. Present the plan for approval; write NO code until confirmed, then hand off to `imp` / `fix` / `ref`.
+6. Present the plan; **save it to `docs/plans/<slug>.md`** right away (reuse the native plan-mode slug if one auto-saved under `~/.claude/plans/`, else pick a short kebab-case topic slug) — write NO code until confirmed in chat, then hand off to `imp` / `fix` / `ref`.

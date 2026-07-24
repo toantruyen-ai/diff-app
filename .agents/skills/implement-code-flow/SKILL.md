@@ -172,3 +172,4 @@ and shells out to `az` / `kubelogin` / `kubectl`. Treat everything crossing the 
 - ❌ **No Raw Bridge**: Never expose raw `ipcRenderer`/`require`/`process` or a generic `invoke` passthrough from preload; never disable `contextIsolation` or enable `nodeIntegration` (§1c).
 - ❌ **No Leaked Secrets**: Never log or return un-redacted tokens/kubeconfigs/Secret values; route Secret payloads through `redactSecretData` (§1c).
 - ❌ **No SQL Concatenation**: Audit-DB queries must be parameterized (`request.input(...)`), never string-built (§1c).
+- ❌ **No Undocumented Change**: Never declare a feature/change complete without an entry in `CHANGELOG.md` under `## Unreleased` (Step 5) — this is a completion gate, same as `npm test`, not an optional step.

@@ -187,12 +187,13 @@ async function getVersions({ clusterId, namespace, kind, name, limit }) {
     req.input('namespace', sql.NVarChar(256), namespace || '');
     req.input('kind', sql.NVarChar(128), kind);
     req.input('name', sql.NVarChar(256), name);
+    req.input('fetchLimit', sql.Int, Math.min(limit || 50, 200));
     const result = await req.query(`
       SELECT id, action, edit_version, k8s_resource_version, updated_by, updated_at
       FROM k8senvdiff_audit
       WHERE cluster_id = @cluster_id AND namespace = @namespace AND kind = @kind AND name = @name
       ORDER BY updated_at DESC
-      OFFSET 0 ROWS FETCH NEXT ${Math.min(limit || 50, 200)} ROWS ONLY
+      OFFSET 0 ROWS FETCH NEXT @fetchLimit ROWS ONLY
     `);
     console.log('[audit-db] getVersions query executed successfully');
     return result.recordset;
@@ -221,6 +222,7 @@ async function getDeletedResources({ clusterId, namespace, limit }) {
   const req = pool.request();
   req.input('cluster_id', sql.NVarChar(64), clusterId);
   req.input('namespace', sql.NVarChar(256), namespace || '');
+  req.input('fetchLimit', sql.Int, Math.min(limit || 100, 200));
   const result = await req.query(`
     WITH latest AS (
       SELECT id, namespace, kind, name, action, edit_version, updated_by, updated_at,
@@ -233,7 +235,7 @@ async function getDeletedResources({ clusterId, namespace, limit }) {
     FROM latest
     WHERE rn = 1 AND action = 'delete'
     ORDER BY updated_at DESC
-    OFFSET 0 ROWS FETCH NEXT ${Math.min(limit || 100, 200)} ROWS ONLY
+    OFFSET 0 ROWS FETCH NEXT @fetchLimit ROWS ONLY
   `);
   return result.recordset;
 }

@@ -47,10 +47,19 @@ The architecture, file mapping, and red lines from `implement-code-flow` apply t
 - Identify risks, unknowns, and rollback points. Note where renderer rebuild (`npm run build:renderer`) is required.
 - State which execution skill each step hands off to.
 
-### Step 6: Present the Plan for Approval
+### Step 6: Present the Plan for Approval, then Persist It
 - Output a concise, structured plan: Goal · Assumptions/Open questions · Files by layer · Contracts · Test plan · Ordered steps · Risks.
-- For a large/multi-session effort, persist it (e.g. under `~/.claude/plans/` or a `docs/` note) and record a pointer.
-- **Do not start coding** until the plan is confirmed. Then invoke the matching execution skill.
+- **Persist every plan** (not only large ones) to `docs/plans/<slug>.md` as soon as it is presented — this is
+  independent of whether the user has approved it yet. Folder `docs/plans/` already exists (create it if missing).
+  - If the native plan-mode tool already auto-saved this plan under `~/.claude/plans/<slug>.md`, **reuse that same
+    slug** and copy its content into `docs/plans/<slug>.md` so both stay in sync.
+  - Otherwise, invent a short descriptive `kebab-case` slug from the plan's topic (2–4 words, e.g. `yaml-dryrun-edit`,
+    `multi-pod-log-viewer`) — do not overwrite an existing file with a different plan; add a `-2`, `-3`, … suffix if the slug collides.
+  - File content: the full plan as presented (same sections), plus a one-line header with the date and status (`Status: Proposed` /
+    `Status: Approved` once confirmed — update the file in place when the user approves).
+  - Tell the user the file path after saving.
+- **Do not start coding** until the plan is confirmed in conversation — persisting the doc is not approval.
+  Then invoke the matching execution skill.
 
 ## 2. Rules & Red Lines
 
@@ -61,3 +70,4 @@ The architecture, file mapping, and red lines from `implement-code-flow` apply t
 - ❌ **No Hidden Contract Breaks**: Any change to an IPC channel or `window.k8sApi` surface must be called out explicitly.
 - ❌ **No Test-Free Plans**: Every plan includes the unit tests to be written under `tests/unit/`.
 - ❌ **No Monolith Reading**: Use `serena` symbol tools and targeted reads to map the path token-efficiently.
+- ❌ **No Unsaved Plans**: Every finalized plan must be persisted under `docs/plans/` (Step 6) before ending the turn — a chat-only plan is incomplete, same completion gate as `npm test` in the execution skills.

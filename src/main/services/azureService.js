@@ -1,11 +1,13 @@
-const { execSync, spawn, exec } = require('child_process');
+const { execSync, execFileSync, spawn, execFile } = require('child_process');
 const { promisify } = require('util');
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const k8s = require('@kubernetes/client-node');
 const { storeAksKc } = require('./kubeconfigStoreService');
+
+const IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
 
 async function checkAzureAuth() {
   try {
@@ -70,7 +72,7 @@ async function azLogout() {
 
 async function azLogin() {
   return new Promise((resolve) => {
-    const proc = spawn('az', ['login'], { shell: true, stdio: 'pipe' });
+    const proc = spawn('az', ['login'], { shell: false, stdio: 'pipe' });
     proc.on('close', (code) => resolve({ ok: code === 0 }));
     proc.on('error', (err) => resolve({ ok: false, error: err.message }));
   });
@@ -112,14 +114,19 @@ async function listAksClusters() {
 }
 
 async function getAksCredentials(name, resourceGroup) {
+  if (!name || typeof name !== 'string' || !IDENTIFIER_PATTERN.test(name) ||
+      !resourceGroup || typeof resourceGroup !== 'string' || !IDENTIFIER_PATTERN.test(resourceGroup)) {
+    return { ok: false, reason: 'invalid-input' };
+  }
   const tmpFile = path.join(os.tmpdir(), `k8senvdiff-${process.pid}-${Date.now()}.yaml`);
   try {
-    execSync(
-      `az aks get-credentials --name "${name}" --resource-group "${resourceGroup}" --file "${tmpFile}" --overwrite-existing`,
+    execFileSync(
+      'az',
+      ['aks', 'get-credentials', '--name', name, '--resource-group', resourceGroup, '--file', tmpFile, '--overwrite-existing'],
       { encoding: 'utf8', timeout: 30000, stdio: 'pipe' }
     );
     try {
-      execSync(`kubelogin convert-kubeconfig -l azurecli --kubeconfig "${tmpFile}"`, {
+      execFileSync('kubelogin', ['convert-kubeconfig', '-l', 'azurecli', '--kubeconfig', tmpFile], {
         encoding: 'utf8',
         timeout: 10000,
         stdio: 'pipe',
@@ -164,10 +171,21 @@ async function listStorageAccounts() {
 }
 
 async function listStorageContainers(accounts) {
+  if (!Array.isArray(accounts)) return [];
   const results = await Promise.all(accounts.map(async (account) => {
+    if (!account || !account.name || typeof account.name !== 'string' || !IDENTIFIER_PATTERN.test(account.name)) {
+      return {
+        name: account?.name || '',
+        environment: account?.environment || '',
+        containers: [],
+        ok: false,
+        reason: 'invalid-input',
+      };
+    }
     try {
-      const { stdout } = await execAsync(
-        `az storage container list --account-name "${account.name}" --auth-mode login --output json`,
+      const { stdout } = await execFileAsync(
+        'az',
+        ['storage', 'container', 'list', '--account-name', account.name, '--auth-mode', 'login', '--output', 'json'],
         { timeout: 60000 }
       );
       const containers = JSON.parse(stdout.trim() || '[]');
@@ -212,10 +230,22 @@ async function listServicebusNamespaces() {
 }
 
 async function listServicebusQueues(namespaces) {
+  if (!Array.isArray(namespaces)) return [];
   const results = await Promise.all(namespaces.map(async (ns) => {
+    if (!ns || !ns.name || typeof ns.name !== 'string' || !IDENTIFIER_PATTERN.test(ns.name) ||
+        !ns.resourceGroup || typeof ns.resourceGroup !== 'string' || !IDENTIFIER_PATTERN.test(ns.resourceGroup)) {
+      return {
+        name: ns?.name || '',
+        environment: ns?.environment || '',
+        queues: [],
+        ok: false,
+        reason: 'invalid-input',
+      };
+    }
     try {
-      const { stdout } = await execAsync(
-        `az servicebus queue list --namespace-name "${ns.name}" --resource-group "${ns.resourceGroup}" --output json`,
+      const { stdout } = await execFileAsync(
+        'az',
+        ['servicebus', 'queue', 'list', '--namespace-name', ns.name, '--resource-group', ns.resourceGroup, '--output', 'json'],
         { timeout: 60000 }
       );
       const queues = JSON.parse(stdout.trim() || '[]');

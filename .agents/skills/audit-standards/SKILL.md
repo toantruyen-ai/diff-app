@@ -71,10 +71,24 @@ one-line description · suggested fix (reference the exact §1b/§1c rule violat
 Group findings by category, most severe first. End with a short summary: counts by severity, and which
 findings are pre-existing/known (already noted in §1c) vs. newly introduced.
 
-## 5. Rules & Red Lines
+## 5. Persist the Report (MANDATORY)
 
-- ❌ **No Silent Fixes**: This skill reports only. Never edit files as part of an audit run.
+Every audit run writes its report to disk — do not leave it only in the chat.
+
+- Folder: `docs/audits/` (create it if it doesn't exist yet — it's a plain subfolder of the existing `docs/`).
+- Filename: `audit-standards-<YYYY-MM-DD>.md` using the **actual current date** (check the session's current-date
+  context or run `date +%F`; never guess). If a report for today's date already exists, append a `-2`, `-3`, … suffix
+  rather than overwriting a prior run the same day.
+- File content: a header with the date and audited scope (`src/**/*.js`), then the full report from §4 —
+  same findings, same grouping, same severity ranking. This is the artifact of record; the chat summary can be shorter,
+  but the file must contain the complete finding list.
+- After writing, tell the user the file path. Do not publish it as an Artifact and do not open a PR/commit unless asked.
+
+## 6. Rules & Red Lines
+
+- ❌ **No Silent Fixes**: This skill reports only. Never edit source files as part of an audit run.
 - ❌ **No Re-deriving Conventions**: Don't invent new rules — check against §1b/§1c exactly as written; if a
   finding suggests the standard itself is incomplete, say so explicitly rather than quietly applying a new rule.
 - ❌ **No Unranked Dumps**: Every finding must carry a severity and a category; don't return an unsorted list.
 - ❌ **No Ignoring Documented Exceptions**: Don't re-flag a trade-off §1c already accepts unless its risk profile changed (e.g. new input path feeding into it).
+- ❌ **No Unwritten Reports**: Every run persists its findings under `docs/audits/` per §5 — a chat-only report is incomplete.

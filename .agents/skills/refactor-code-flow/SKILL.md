@@ -65,3 +65,4 @@ The architecture, file mapping, and red lines from `implement-code-flow` still a
 - ❌ **No Feature Smuggling**: Do not add capabilities or fix bugs mid-refactor — do those in a separate pass/skill.
 - ❌ **No Stale Bundles**: Renderer restructures require `npm run build:renderer`; `index.html` loads `dist/app.js`.
 - ❌ **No Broken Invariants**: Never drop `withTimeout`, audit/write-gate, teardown, or constants usage while restructuring.
+- ❌ **No Undocumented Refactor**: Never declare a refactor complete without a `Changed:` entry in `CHANGELOG.md` under `## Unreleased` (Step 6) — this is a completion gate, same as `npm test`, not an optional step.

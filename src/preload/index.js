@@ -25,6 +25,7 @@ function exposePreloadApi(customElectron) {
     azLogout: () => ipcRenderer.invoke('az-logout'),
     kubeloginRefresh: () => ipcRenderer.invoke('kubelogin-refresh'),
     triggerUpdate: () => ipcRenderer.invoke('trigger-update'),
+    getAppVersion: () => ipcRenderer.invoke('get-app-version'),
     onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_e, v) => cb(v)),
 
     listResource: (ref, ctx, ns, kind) => ipcRenderer.invoke('list-resource', ref, ctx, ns, kind),
@@ -59,6 +60,7 @@ function exposePreloadApi(customElectron) {
     
     toggleEventCapture: (params) => ipcRenderer.invoke('toggle-event-capture', params),
 
+    auditDbDiscover: () => ipcRenderer.invoke('audit-db-discover'),
     discoverAuditDb: () => ipcRenderer.invoke('audit-db-discover'),
     connectAuditDb: (user, pw) => ipcRenderer.invoke('audit-db-connect', user, pw),
     disconnectAuditDb: () => ipcRenderer.invoke('audit-db-disconnect'),

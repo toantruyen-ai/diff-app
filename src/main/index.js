@@ -1,6 +1,6 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const os = require('os');
 const { registerAllIpcHandlers } = require('./ipc');
 const { stopAllWatchSessions } = require('./services/watchService');
@@ -32,7 +32,7 @@ if (app.isPackaged) {
 if ((process.platform === 'darwin' || process.platform === 'linux') && app.isPackaged) {
   try {
     const shell = process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash');
-    const shellPath = execSync(`${shell} -l -c 'echo $PATH'`, {
+    const shellPath = execFileSync(shell, ['-l', '-c', 'echo $PATH'], {
       encoding: 'utf8',
       timeout: 3000,
     }).trim();

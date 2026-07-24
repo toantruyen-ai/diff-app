@@ -1,4 +1,3 @@
-const { ipcMain } = require('electron');
 const k8s = require('@kubernetes/client-node');
 const { auditDb, resolveClusterId, recordAudit, readManageObject, createManageObject } = require('../services/auditService');
 const eventsService = require('../services/eventsService');
@@ -6,7 +5,17 @@ const { buildKubeConfig } = require('../utils/k8sHelper');
 const { stripForRecreate } = require('../utils/resourceFormatter');
 const { RESTORABLE_KINDS } = require('../constants/k8sConstants');
 
-function registerAuditHandlers() {
+const IDENTIFIER_REGEX = /^[a-z0-9][a-z0-9._-]*$/i;
+
+function isValidIdentifier(val, allowEmpty = false) {
+  if (val === undefined || val === null || val === '') {
+    return allowEmpty;
+  }
+  return typeof val === 'string' && IDENTIFIER_REGEX.test(val);
+}
+
+function registerAuditHandlers(customElectron) {
+  const { ipcMain } = customElectron || require('electron');
   ipcMain.handle('audit-db-discover', async () => auditDb.discover());
 
   ipcMain.handle('audit-db-connect', async (_e, user, password) => {
@@ -31,6 +40,9 @@ function registerAuditHandlers() {
   ipcMain.handle('audit-db-status', async () => auditDb.status());
 
   ipcMain.handle('get-resource-versions', async (_e, ref, contextName, namespace, kind, name) => {
+    if (!isValidIdentifier(kind, false) || !isValidIdentifier(name, false) || !isValidIdentifier(namespace, true)) {
+      return { ok: false, reason: 'invalid-input' };
+    }
     try {
       const clusterId = resolveClusterId(ref, contextName);
       const rows = await auditDb.getVersions({ clusterId, namespace, kind, name });
@@ -51,6 +63,9 @@ function registerAuditHandlers() {
   });
 
   ipcMain.handle('get-deleted-resources', async (_e, ref, contextName, namespace) => {
+    if (!isValidIdentifier(namespace, true)) {
+      return { ok: false, reason: 'invalid-input' };
+    }
     try {
       const clusterId = resolveClusterId(ref, contextName);
       const rows = await auditDb.getDeletedResources({ clusterId, namespace });
@@ -61,6 +76,12 @@ function registerAuditHandlers() {
   });
 
   ipcMain.handle('restore-deleted-resource', async (_e, ref, contextName, namespace, kind, name, id, crdMeta) => {
+    if (!isValidIdentifier(kind, false) || !isValidIdentifier(name, false) || !isValidIdentifier(namespace, true)) {
+      return { ok: false, reason: 'invalid-input' };
+    }
+    if (id !== undefined && id !== null && typeof id !== 'string') {
+      return { ok: false, reason: 'invalid-input' };
+    }
     if (!auditDb.status().connected) return { ok: false, error: 'Audit DB not connected', kind: 'forbidden' };
     if (!crdMeta && kind === 'secrets') {
       return { ok: false, error: 'Secrets cannot be restored — their values were redacted at delete time and were never saved.', kind: 'validation' };
@@ -110,6 +131,12 @@ function registerAuditHandlers() {
   });
 
   ipcMain.handle('restore-resource-version', async (_e, ref, contextName, namespace, kind, name, id, crdMeta) => {
+    if (!isValidIdentifier(kind, false) || !isValidIdentifier(name, false) || !isValidIdentifier(namespace, true)) {
+      return { ok: false, reason: 'invalid-input' };
+    }
+    if (id !== undefined && id !== null && typeof id !== 'string') {
+      return { ok: false, reason: 'invalid-input' };
+    }
     if (!auditDb.status().connected) return { ok: false, error: 'Audit DB not connected', kind: 'forbidden' };
     try {
       const versionRow = await auditDb.getVersionYaml(id);
@@ -237,7 +264,14 @@ function registerAuditHandlers() {
     }
   });
 
-  ipcMain.handle('get-local-events', async (_e, { namespace, kind, name }) => {
+  ipcMain.handle('get-local-events', async (_e, params = {}) => {
+    if (!params || typeof params !== 'object') {
+      return { ok: false, reason: 'invalid-input' };
+    }
+    const { namespace, kind, name } = params;
+    if (!isValidIdentifier(namespace, true) || !isValidIdentifier(kind, true) || !isValidIdentifier(name, true)) {
+      return { ok: false, reason: 'invalid-input' };
+    }
     try {
       const rows = await eventsService.eventsDb.getLocalEvents(namespace, kind, name);
       return { ok: true, rows };

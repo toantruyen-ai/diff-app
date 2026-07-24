@@ -21,5 +21,11 @@ describe('Preload Bridge', () => {
     expect(typeof exposedApi.selectKubeconfig).toBe('function');
     expect(typeof exposedApi.loadEnvs).toBe('function');
     expect(typeof exposedApi.startPodLogs).toBe('function');
+    expect(typeof exposedApi.getAppVersion).toBe('function');
+    expect(typeof exposedApi.auditDbDiscover).toBe('function');
+    exposedApi.getAppVersion();
+    expect(mockElectron.ipcRenderer.invoke).toHaveBeenCalledWith('get-app-version');
+    exposedApi.auditDbDiscover();
+    expect(mockElectron.ipcRenderer.invoke).toHaveBeenCalledWith('audit-db-discover');
   });
 });

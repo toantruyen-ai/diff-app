@@ -59,3 +59,4 @@ building something **new**. The architecture, file mapping, and red lines from `
 - ❌ **No Unverified Claims**: Never declare fixed without full `npm test` at 100% pass.
 - ❌ **No Stale Bundles**: Renderer fixes require `npm run build:renderer`; `index.html` loads `dist/app.js`, not `app.js`.
 - ❌ **No Regression on Mutations**: Never remove or bypass the audit/write-gate path while fixing a mutation bug.
+- ❌ **No Undocumented Fix**: Never declare a bug fixed without a `Fixed:` entry in `CHANGELOG.md` under `## Unreleased` (Step 6) — this is a completion gate, same as `npm test`, not an optional step.
