@@ -12,12 +12,17 @@
     "url": "https://github.com/toantruyen-ai/diff-app.git"
   },
   "scripts": {
-    "prestart": "node scripts/patch-electron-name.js",
+    "build:renderer": "esbuild renderer/app.js --bundle --format=iife --platform=browser --outfile=renderer/dist/app.js",
+    "prestart": "node scripts/patch-electron-name.js && npm run build:renderer",
     "start": "electron .",
-    "predev": "node scripts/patch-electron-name.js",
+    "predev": "node scripts/patch-electron-name.js && npm run build:renderer",
     "dev": "electron . --dev",
+    "test": "vitest run",
+    "prebuild:mac": "npm run build:renderer",
     "build:mac": "electron-builder --mac",
+    "prebuild:linux": "npm run build:renderer",
     "build:linux": "electron-builder --linux",
+    "prebuild:all": "npm run build:renderer",
     "build:all": "electron-builder --mac --linux"
   },
   "dependencies": {
@@ -31,7 +36,9 @@
   },
   "devDependencies": {
     "electron": "^28.0.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
+    "vitest": "^4.1.10"
   },
   "build": {
     "appId": "com.devops.diff-app",
@@ -46,10 +53,9 @@
     "files": [
       "main.js",
       "preload.js",
-      "audit-db.js",
-      "events-db.js",
       "logo.png",
       "build/icon.png",
+      "src/**/*",
       "renderer/**/*",
       "node_modules/**/*"
     ],

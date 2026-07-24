@@ -1,3 +1,8 @@
+/* ── Shared renderer utils (bundled by esbuild from src/renderer) ──────────── */
+const { escHtml, csvEscape, rowsToCsv, downloadTextFile } = require('../src/renderer/utils/htmlUtils');
+const { highlightYaml } = require('../src/renderer/utils/yamlHighlighter');
+const { getSourceClass, computeEnvDiffRows } = require('../src/renderer/utils/envDiffComputer');
+
 /* ── State ───────────────────────────────────────────────────────────────── */
 const state = {
   left:  { kubeconfig: null, context: null, namespace: null, deployment: null, envs: null },
@@ -846,48 +851,11 @@ el.toggleMask.addEventListener('change', () => {
    ════════════════════════════════════════════════════════════════════════════ */
 let lastEnvs = null;
 
-// Pure diff computation, shared by the on-screen table and CSV/JSON export — both must
-// reflect the same filter/search/mask state so export never becomes an accidental bypass.
-function computeEnvDiffRows(leftEnvs, rightEnvs) {
-  const allKeys = Array.from(
-    new Set([...Object.keys(leftEnvs), ...Object.keys(rightEnvs)])
-  ).sort();
-
-  const rows = [];
-  let totalDiff = 0, totalSame = 0, totalMissing = 0;
-
-  for (const key of allKeys) {
-    const lEntry = leftEnvs[key];
-    const rEntry = rightEnvs[key];
-    const lVal   = lEntry?.value;
-    const rVal   = rEntry?.value;
-
-    let rowType;
-    if (lEntry && rEntry) rowType = lVal === rVal ? 'same' : 'diff';
-    else                   rowType = 'missing';
-
-    if (rowType === 'diff')    totalDiff++;
-    else if (rowType === 'same') totalSame++;
-    else                         totalMissing++;
-
-    if (state.filter !== 'all' && state.filter !== rowType) continue;
-    if (state.search && !key.toLowerCase().includes(state.search)) continue;
-
-    const source = lEntry?.source || rEntry?.source || 'Unknown';
-    rows.push({
-      key, rowType, source, sourceLabel: formatSourceLabel(source),
-      leftPresent: !!lEntry, rightPresent: !!rEntry,
-      leftValue: lEntry ? maskValue(lVal, source) : null,
-      rightValue: rEntry ? maskValue(rVal, source) : null,
-    });
-  }
-
-  return { rows, totalDiff, totalSame, totalMissing };
-}
-
 function renderTable(leftEnvs, rightEnvs) {
   lastEnvs = { left: leftEnvs, right: rightEnvs };
-  const { rows, totalDiff, totalSame, totalMissing } = computeEnvDiffRows(leftEnvs, rightEnvs);
+  const { rows, totalDiff, totalSame, totalMissing } = computeEnvDiffRows(leftEnvs, rightEnvs, {
+    filter: state.filter, search: state.search, maskSecrets: state.maskSecrets,
+  });
 
   el.diffBody.innerHTML = '';
   for (const row of rows) {
@@ -919,7 +887,9 @@ function renderTable(leftEnvs, rightEnvs) {
 
 el.envDiffExportCsv.addEventListener('click', () => {
   if (!lastEnvs) return;
-  const { rows } = computeEnvDiffRows(lastEnvs.left, lastEnvs.right);
+  const { rows } = computeEnvDiffRows(lastEnvs.left, lastEnvs.right, {
+    filter: state.filter, search: state.search, maskSecrets: state.maskSecrets,
+  });
   const csv = rowsToCsv(
     ['Key', 'Source', 'A', 'B', 'Status'],
     rows.map((r) => [r.key, r.sourceLabel, r.leftPresent ? r.leftValue : '', r.rightPresent ? r.rightValue : '', r.rowType])
@@ -929,36 +899,13 @@ el.envDiffExportCsv.addEventListener('click', () => {
 
 el.envDiffExportJson.addEventListener('click', () => {
   if (!lastEnvs) return;
-  const { rows } = computeEnvDiffRows(lastEnvs.left, lastEnvs.right);
+  const { rows } = computeEnvDiffRows(lastEnvs.left, lastEnvs.right, {
+    filter: state.filter, search: state.search, maskSecrets: state.maskSecrets,
+  });
   downloadTextFile('env-diff.json', JSON.stringify(rows, null, 2), 'application/json');
 });
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
-function maskValue(val, source) {
-  if (!state.maskSecrets) return val ?? '';
-  if (source && source.toLowerCase().includes('secret')) return val ? '••••••••' : '';
-  return val ?? '';
-}
-
-function getSourceClass(source) {
-  if (!source) return 'source-missing';
-  const s = source.toLowerCase();
-  if (s === 'direct')    return 'source-direct';
-  if (s.startsWith('configmap')) return 'source-configmap';
-  if (s.startsWith('secret'))    return 'source-secret';
-  if (s.startsWith('fieldref') || s.startsWith('resourcefield')) return 'source-fieldref';
-  return 'source-missing';
-}
-
-function formatSourceLabel(source) {
-  if (!source) return '?';
-  if (source === 'Direct') return 'Direct';
-  if (source.startsWith('ConfigMap:')) return `CM: ${source.replace('ConfigMap:', '').split('[')[0]}`;
-  if (source.startsWith('Secret:'))    return `Sec: ${source.replace('Secret:', '').split('[')[0]}`;
-  if (source === 'FieldRef') return 'FieldRef';
-  return source;
-}
-
 function populateSelect(selectEl, items, placeholder) {
   selectEl.innerHTML = `<option value="">${escHtml(placeholder)}</option>`;
   items.forEach((item) => {
@@ -973,119 +920,6 @@ function setStatus(side, msg, type) {
   const s = el[side].status;
   s.textContent = msg;
   s.className   = 'panel-status' + (type ? ` ${type}` : '');
-}
-
-function escHtml(str) {
-  if (str == null) return '';
-  return String(str)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/* ── YAML syntax highlighting (Manage YAML tab, Full Manifest Diff, History diff) ────────── */
-const YAML_BOOL_NULL_RE = /^(true|false|yes|no|on|off|null|~)$/i;
-const YAML_NUMBER_RE = /^[-+]?(0x[0-9a-fA-F]+|0o[0-7]+|(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?|\.inf|\.nan)$/i;
-const YAML_BLOCK_SCALAR_RE = /^[|>][+-]?\d*$/;
-const YAML_KEY_RE = /^(-\s+)?((?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^:#\s][^:]*?)):([ \t][\s\S]*)?$/;
-const YAML_LIST_SCALAR_RE = /^(-\s+)([\s\S]*)$/;
-
-function findYamlCommentStart(s) {
-  let inSingle = false, inDouble = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (inSingle) { if (c === "'") inSingle = false; continue; }
-    if (inDouble) { if (c === '\\') { i++; } else if (c === '"') inDouble = false; continue; }
-    if (c === "'") { inSingle = true; continue; }
-    if (c === '"') { inDouble = true; continue; }
-    if (c === '#' && (i === 0 || /\s/.test(s[i - 1]))) return i;
-  }
-  return -1;
-}
-
-function tokenizeYamlScalar(text) {
-  const [, lead, core, trail] = text.match(/^(\s*)([\s\S]*?)(\s*)$/);
-  if (core === '') return escHtml(text);
-  let cls = 'yaml-string';
-  if (YAML_BOOL_NULL_RE.test(core)) cls = 'yaml-bool';
-  else if (YAML_NUMBER_RE.test(core)) cls = 'yaml-number';
-  else if (YAML_BLOCK_SCALAR_RE.test(core)) cls = 'yaml-punct';
-  return `${escHtml(lead)}<span class="${cls}">${escHtml(core)}</span>${escHtml(trail)}`;
-}
-
-function renderYamlIndentGuides(indent) {
-  const unit = 2;
-  let html = '';
-  let i = 0;
-  for (; i + unit <= indent.length; i += unit) {
-    html += `<span class="yaml-indent-guide">${escHtml(indent.slice(i, i + unit))}</span>`;
-  }
-  if (i < indent.length) html += escHtml(indent.slice(i));
-  return html;
-}
-
-function highlightYamlLine(line) {
-  const [, indent, rest] = line.match(/^(\s*)([\s\S]*)$/);
-  if (rest === '') return escHtml(indent);
-  const indentHtml = renderYamlIndentGuides(indent);
-  const trimmedRest = rest.trim();
-  if (trimmedRest === '---' || trimmedRest === '...') {
-    return `${indentHtml}<span class="yaml-docsep">${escHtml(trimmedRest)}</span>`;
-  }
-  if (rest[0] === '#') {
-    return `${indentHtml}<span class="yaml-comment">${escHtml(rest)}</span>`;
-  }
-
-  const commentIdx = findYamlCommentStart(rest);
-  const valuePart = commentIdx === -1 ? rest : rest.slice(0, commentIdx);
-  const commentPart = commentIdx === -1 ? '' : rest.slice(commentIdx);
-
-  let bodyHtml;
-  const keyMatch = valuePart.match(YAML_KEY_RE);
-  if (keyMatch) {
-    const dash = keyMatch[1] || '';
-    const key = keyMatch[2];
-    const tail = keyMatch[3];
-    bodyHtml = (dash ? `<span class="yaml-dash">${escHtml(dash)}</span>` : '')
-      + `<span class="yaml-key">${escHtml(key)}</span><span class="yaml-punct">:</span>`
-      + (tail ? tokenizeYamlScalar(tail) : '');
-  } else {
-    const listMatch = valuePart.match(YAML_LIST_SCALAR_RE);
-    if (listMatch) {
-      bodyHtml = `<span class="yaml-dash">${escHtml(listMatch[1])}</span>${tokenizeYamlScalar(listMatch[2])}`;
-    } else {
-      bodyHtml = tokenizeYamlScalar(valuePart);
-    }
-  }
-
-  const commentHtml = commentPart ? `<span class="yaml-comment">${escHtml(commentPart)}</span>` : '';
-  return indentHtml + bodyHtml + commentHtml;
-}
-
-function highlightYaml(text) {
-  if (text == null) return '';
-  return String(text).split('\n').map(highlightYamlLine).join('\n');
-}
-
-/* ── Export helpers (shared by Env Vars / Full Manifest / Storage / ServiceBus diffs) ────── */
-function downloadTextFile(filename, content, mime) {
-  const blob = new Blob([content], { type: mime || 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function csvEscape(val) {
-  const s = val == null ? '' : String(val);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-function rowsToCsv(headers, rows) {
-  const lines = [headers.map(csvEscape).join(',')];
-  for (const row of rows) lines.push(row.map(csvEscape).join(','));
-  return lines.join('\n');
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
