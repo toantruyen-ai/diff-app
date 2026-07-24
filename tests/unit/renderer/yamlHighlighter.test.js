@@ -18,4 +18,11 @@ describe('yamlHighlighter', () => {
     expect(html).toContain('<span class="yaml-number">3</span>');
     expect(html).toContain('<span class="yaml-bool">true</span>');
   });
+
+  it('preserves exact raw text length when tags are stripped to prevent cursor drift', () => {
+    const rawYaml = 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: my-app # comment';
+    const highlighted = highlightYaml(rawYaml);
+    const stripped = highlighted.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+    expect(stripped).toBe(rawYaml);
+  });
 });

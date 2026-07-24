@@ -80,7 +80,9 @@ function highlightYamlLine(line) {
 
 function highlightYaml(text) {
   if (text == null) return '';
-  return String(text).split('\n').map(highlightYamlLine).join('\n');
+  const str = String(text);
+  const html = str.split('\n').map(highlightYamlLine).join('\n');
+  return str.endsWith('\n') ? html + '\n' : html;
 }
 
 module.exports = {

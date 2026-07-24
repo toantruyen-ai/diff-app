@@ -2,6 +2,8 @@
 const { escHtml, csvEscape, rowsToCsv, downloadTextFile } = require('../src/renderer/utils/htmlUtils');
 const { highlightYaml } = require('../src/renderer/utils/yamlHighlighter');
 const { getSourceClass, computeEnvDiffRows } = require('../src/renderer/utils/envDiffComputer');
+const { createMultiPodLogViewer } = require('../src/renderer/utils/multiPodLogViewer');
+const { initYamlEditor } = require('../src/renderer/utils/yamlEditor');
 
 /* ── State ───────────────────────────────────────────────────────────────── */
 const state = {
@@ -186,7 +188,7 @@ const el = {
   manageRefreshStatus:  $('manage-refresh-status'),
   manageBtnRefresh:     $('manage-btn-refresh'),
   manageSettingsBtn:    $('manage-settings-btn'),
-  manageSettingsPopover: $('manage-settings-popover'),
+  manageSettingsPane:   $('manage-settings-pane'),
   manageSettingMetrics: $('manage-setting-metrics'),
   manageSettingAutoRefresh: $('manage-setting-autorefresh'),
   manageSettingEventCapture: $('manage-setting-event-capture'),
@@ -210,6 +212,10 @@ const el = {
   manageYamlTextarea:   $('manage-yaml-textarea'),
   manageYamlError:      $('manage-yaml-error'),
   manageYamlEdit:       $('manage-yaml-edit'),
+  manageYamlDryRun:     $('manage-yaml-dryrun'),
+  manageYamlLintBadge:  $('manage-yaml-lint-badge'),
+  manageYamlDiffPanel:  $('manage-yaml-diff-panel'),
+  manageYamlConflictBar: $('manage-yaml-conflict-bar'),
   manageYamlSave:       $('manage-yaml-save'),
   manageYamlCancel:     $('manage-yaml-cancel'),
   manageYamlReload:     $('manage-yaml-reload'),
@@ -219,20 +225,21 @@ const el = {
   manageAccessPane:     $('manage-access-pane'),
   manageAccessTbody:    $('manage-access-tbody'),
   manageLogsPane:       $('manage-logs-pane'),
-  manageLogContainer:   $('manage-log-container'),
-  manageLogFollow:      $('manage-log-follow'),
-  manageLogTail:        $('manage-log-tail'),
-  manageLogClear:       $('manage-log-clear'),
-  manageLogOutput:      $('manage-log-output'),
+  manageClusterlogsPane: $('manage-clusterlogs-pane'),
   manageExecPane:       $('manage-exec-pane'),
   manageExecContainer:  $('manage-exec-container'),
   manageExecStatus:     $('manage-exec-status'),
   manageTerm:           $('manage-term'),
   managePfPane:         $('manage-pf-pane'),
   managePfTargetPort:   $('manage-pf-target-port'),
+  managePfCustomPort:   $('manage-pf-custom-port'),
   managePfLocalPort:    $('manage-pf-local-port'),
+  managePfOpenBrowser:  $('manage-pf-open-browser'),
   managePfStart:        $('manage-pf-start'),
   managePfList:         $('manage-pf-list'),
+  managePortforwardsPane:       $('manage-portforwards-pane'),
+  managePortforwardsGlobalList: $('manage-portforwards-global-list'),
+  managePfGlobalStopAllBtn:     $('manage-pf-global-stop-all-btn'),
   manageMetricsPane:    $('manage-metrics-pane'),
   manageConfirmOverlay: $('manage-confirm-overlay'),
   manageConfirmTitle:   $('manage-confirm-title'),
@@ -1816,7 +1823,7 @@ const MANAGE_SETTINGS_KEY = 'k8s-manage-settings';
 // Group definitions: maps group name → array of kind keys
 const MANAGE_SETTINGS_GROUPS = {
   workloads: ['pods','deployments','statefulsets','daemonsets','replicasets','jobs','cronjobs',
-              'services','ingresses','configmaps','secrets','hpas','nodes','pvs','namespaces','events'],
+              'services','ingresses','configmaps','secrets','hpas','nodes','pvs','namespaces'],
   rbac: ['serviceaccounts','roles','rolebindings','clusterroles','clusterrolebindings'],
   policy: ['networkpolicies','storageclasses','resourcequotas','limitranges','pvcs'],
   crd: ['_crd'],
@@ -1880,7 +1887,7 @@ function clearAuditCreds() {
 // Load settings immediately on startup
 loadManageSettings();
 
-// ── Sync checkboxes in popover to match state ─────────────────────────────────
+// ── Sync checkboxes in settings pane to match state ───────────────────────────
 
 function syncSettingsPopoverToState() {
   // Performance checkboxes
@@ -1891,13 +1898,13 @@ function syncSettingsPopoverToState() {
 
   // Menu item checkboxes
   const vis = state.manage.menuVisibility;
-  el.manageSettingsPopover.querySelectorAll('[data-settings-menu]').forEach((cb) => {
+  el.manageSettingsPane.querySelectorAll('[data-settings-menu]').forEach((cb) => {
     cb.checked = !!vis[cb.dataset.settingsMenu];
   });
 
   // Group checkboxes (tri-state)
   for (const [group, kinds] of Object.entries(MANAGE_SETTINGS_GROUPS)) {
-    const groupCb = el.manageSettingsPopover.querySelector(`[data-settings-group="${group}"]`);
+    const groupCb = el.manageSettingsPane.querySelector(`[data-settings-group="${group}"]`);
     if (!groupCb) continue;
     const onCount = kinds.filter((k) => vis[k]).length;
     groupCb.checked = onCount === kinds.length;
@@ -1921,7 +1928,7 @@ function applyMenuVisibility() {
   // Show/hide individual nav items
   el.manageSidebar.querySelectorAll('.manage-nav-item[data-kind]').forEach((btn) => {
     const kind = btn.dataset.kind;
-    if (isManageSpecialView(kind)) return; // Overview / Recycle Bin are always visible
+    if (isManageSpecialView(kind) || kind === 'settings' || kind === 'events') return; // Overview / Recycle Bin / Cluster Logs / Settings / Events are always visible
     btn.style.display = vis[kind] ? '' : 'none';
   });
 
@@ -1952,33 +1959,9 @@ function applyMenuVisibility() {
   }
 }
 
-// ── Popover toggle ────────────────────────────────────────────────────────────
+// ── Menu item checkbox handlers inside Settings Pane ──────────────────────────
 
-el.manageSettingsBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  const popover = el.manageSettingsPopover;
-  const isOpen = popover.style.display !== 'none';
-  if (isOpen) {
-    popover.style.display = 'none';
-  } else {
-    syncSettingsPopoverToState();
-    popover.style.display = '';
-  }
-});
-
-// Close popover on click outside
-document.addEventListener('click', (e) => {
-  if (el.manageSettingsPopover.style.display === 'none') return;
-  if (el.manageSettingsPopover.contains(e.target) || el.manageSettingsBtn.contains(e.target)) return;
-  el.manageSettingsPopover.style.display = 'none';
-});
-
-// Prevent popover clicks from bubbling to sidebar nav delegation
-el.manageSettingsPopover.addEventListener('click', (e) => e.stopPropagation());
-
-// ── Menu item checkbox handlers ───────────────────────────────────────────────
-
-el.manageSettingsPopover.addEventListener('change', (e) => {
+el.manageSettingsPane.addEventListener('change', (e) => {
   const target = e.target;
 
   // Individual item checkbox
@@ -1988,7 +1971,7 @@ el.manageSettingsPopover.addEventListener('change', (e) => {
     // Update parent group checkbox state
     for (const [group, kinds] of Object.entries(MANAGE_SETTINGS_GROUPS)) {
       if (kinds.includes(kind)) {
-        const groupCb = el.manageSettingsPopover.querySelector(`[data-settings-group="${group}"]`);
+        const groupCb = el.manageSettingsPane.querySelector(`[data-settings-group="${group}"]`);
         if (groupCb) {
           const onCount = kinds.filter((k) => state.manage.menuVisibility[k]).length;
           groupCb.checked = onCount === kinds.length;
@@ -2010,7 +1993,7 @@ el.manageSettingsPopover.addEventListener('change', (e) => {
     target.indeterminate = false;
     for (const kind of kinds) {
       state.manage.menuVisibility[kind] = checked;
-      const itemCb = el.manageSettingsPopover.querySelector(`[data-settings-menu="${kind}"]`);
+      const itemCb = el.manageSettingsPane.querySelector(`[data-settings-menu="${kind}"]`);
       if (itemCb) itemCb.checked = checked;
     }
     applyMenuVisibility();
@@ -2647,11 +2630,120 @@ function updateManageKindTitle() {
 // the resource-listing endpoints, have no table, and are exempt from the per-kind menu-visibility
 // toggle (always shown).
 function isManageSpecialView(resourceType) {
-  return resourceType === 'overview' || resourceType === 'recyclebin';
+  return resourceType === 'overview' || resourceType === 'recyclebin' || resourceType === 'clusterlogs' || resourceType === 'settings' || resourceType === 'portforwards';
+}
+
+function startManageClusterLogs() {
+  stopManageClusterLogs();
+  const data = state.manage;
+  if (!data.context) return;
+
+  const sid = crypto.randomUUID();
+  if (!data.clusterLogsViewer) {
+    data.clusterLogsViewer = createMultiPodLogViewer(el.manageClusterlogsPane);
+  }
+
+  data.clusterLogsSession = {
+    sid,
+    stop: () => data.clusterLogsViewer.stopSession(),
+  };
+
+  data.clusterLogsViewer.startSession(
+    data.kubeconfig,
+    data.context,
+    data.namespace || 'default',
+    null,
+    {},
+    sid
+  );
+}
+
+function stopManageClusterLogs() {
+  const session = state.manage.clusterLogsSession;
+  if (!session) return;
+  session.stop();
+  state.manage.clusterLogsSession = null;
 }
 
 function selectManageKind(kind) {
   const data = state.manage;
+
+  if (kind === 'settings') {
+    if (data.mode === 'kind' && data.resourceType === 'settings') return;
+    data.mode = 'kind';
+    data.activeCrd = null;
+    data.resourceType = 'settings';
+    data.rows = [];
+    clearManageSelection();
+    el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === 'settings'));
+    el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
+    closeManageDrawer();
+    stopManageOverviewPolling();
+    stopManagePolling();
+    stopManageWatch();
+    stopManageMetricsPolling();
+    stopManageClusterLogs();
+    el.manageOverviewPane.style.display = 'none';
+    el.manageClusterlogsPane.style.display = 'none';
+    el.manageRecyclebinPane.style.display = 'none';
+    if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
+    el.manageTableWrap.style.display = 'none';
+    el.manageSettingsPane.style.display = 'block';
+    updateManageKindTitle();
+    syncSettingsPopoverToState();
+    return;
+  }
+
+  if (kind === 'clusterlogs') {
+    if (data.mode === 'kind' && data.resourceType === 'clusterlogs') return;
+    data.mode = 'kind';
+    data.activeCrd = null;
+    data.resourceType = 'clusterlogs';
+    data.rows = [];
+    clearManageSelection();
+    el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === 'clusterlogs'));
+    el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
+    closeManageDrawer();
+    stopManageOverviewPolling();
+    stopManagePolling();
+    stopManageWatch();
+    stopManageMetricsPolling();
+    el.manageOverviewPane.style.display = 'none';
+    el.manageRecyclebinPane.style.display = 'none';
+    if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
+    el.manageTableWrap.style.display = 'none';
+    el.manageSettingsPane.style.display = 'none';
+    el.manageClusterlogsPane.style.display = 'flex';
+    updateManageKindTitle();
+    startManageClusterLogs();
+    return;
+  }
+
+  if (kind === 'portforwards') {
+    if (data.mode === 'kind' && data.resourceType === 'portforwards') return;
+    data.mode = 'kind';
+    data.activeCrd = null;
+    data.resourceType = 'portforwards';
+    data.rows = [];
+    clearManageSelection();
+    el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === 'portforwards'));
+    el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
+    closeManageDrawer();
+    stopManageOverviewPolling();
+    stopManagePolling();
+    stopManageWatch();
+    stopManageMetricsPolling();
+    stopManageClusterLogs();
+    el.manageOverviewPane.style.display = 'none';
+    el.manageClusterlogsPane.style.display = 'none';
+    el.manageRecyclebinPane.style.display = 'none';
+    el.manageSettingsPane.style.display = 'none';
+    el.manageTableWrap.style.display = 'none';
+    if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'flex';
+    updateManageKindTitle();
+    loadManagePortForwardsPage();
+    return;
+  }
 
   if (kind === 'recyclebin') {
     if (data.mode === 'kind' && data.resourceType === 'recyclebin') return;
@@ -2667,7 +2759,11 @@ function selectManageKind(kind) {
     stopManagePolling();
     stopManageWatch();
     stopManageMetricsPolling();
+    stopManageClusterLogs();
     el.manageOverviewPane.style.display = 'none';
+    el.manageClusterlogsPane.style.display = 'none';
+    if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
+    el.manageSettingsPane.style.display = 'none';
     el.manageTableWrap.style.display = 'none';
     el.manageRecyclebinPane.style.display = 'flex';
     el.manageRecyclebinYaml.style.display = 'none';
@@ -2690,8 +2786,12 @@ function selectManageKind(kind) {
     stopManagePolling();
     stopManageWatch();
     stopManageMetricsPolling();
+    stopManageClusterLogs();
     el.manageTableWrap.style.display = 'none';
     el.manageRecyclebinPane.style.display = 'none';
+    if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
+    el.manageClusterlogsPane.style.display = 'none';
+    el.manageSettingsPane.style.display = 'none';
     el.manageOverviewPane.style.display = 'flex';
     updateManageKindTitle();
     startManageOverviewPolling();
@@ -2705,8 +2805,12 @@ function selectManageKind(kind) {
   clearManageSelection();
   el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === kind));
   el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
+  stopManageClusterLogs();
   el.manageOverviewPane.style.display = 'none';
   el.manageRecyclebinPane.style.display = 'none';
+  if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
+  el.manageClusterlogsPane.style.display = 'none';
+  el.manageSettingsPane.style.display = 'none';
   el.manageTableWrap.style.display = '';
   updateManageKindTitle();
   closeManageDrawer();
@@ -3745,19 +3849,20 @@ function openManageDrawer(kind, row) {
   renderManageDrawerActions(kind, row);
 
   const isPod = kind === 'pods' && state.manage.mode === 'kind';
+  const isWorkloadWithLogs = state.manage.mode === 'kind' && ['pods', 'deployments', 'statefulsets', 'daemonsets'].includes(kind.toLowerCase());
   const isMetricsKind = state.manage.mode === 'kind' && MANAGE_METRICS_KINDS.includes(kind) && state.manage.enableMetrics;
   const logsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="logs"]');
   const execTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="exec"]');
   const pfTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="portforward"]');
   const metricsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="metrics"]');
-  logsTabBtn.style.display = isPod ? '' : 'none';
+  logsTabBtn.style.display = isWorkloadWithLogs ? '' : 'none';
   execTabBtn.style.display = isPod ? '' : 'none';
   pfTabBtn.style.display = isPod ? '' : 'none';
   metricsTabBtn.style.display = isMetricsKind ? '' : 'none';
   el.manageYamlRevealLabel.style.display = (state.manage.mode === 'kind' && kind === 'secrets') ? '' : 'none';
   if (isPod) {
-    populateManageLogContainerPicker(row.containers || []);
     populateManageExecContainerPicker(row.containers || []);
+    populateManagePfPortPicker(row);
   }
 
   switchManageTab('detail');
@@ -3936,7 +4041,7 @@ function switchManageTab(tab) {
   el.manageTabs.forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   el.manageDetailPane.style.display = tab === 'detail' ? '' : 'none';
   el.manageYamlPane.style.display = tab === 'yaml' ? 'flex' : 'none';
-  el.manageEventsPane.style.display = tab === 'events' ? 'flex' : 'none';
+  if (el.manageEventsPane) el.manageEventsPane.style.display = tab === 'events' ? 'flex' : 'none';
   el.manageAccessPane.style.display = tab === 'access' ? 'flex' : 'none';
   el.manageLogsPane.style.display = tab === 'logs' ? 'flex' : 'none';
   el.manageExecPane.style.display = tab === 'exec' ? 'flex' : 'none';
@@ -3944,10 +4049,10 @@ function switchManageTab(tab) {
   el.manageMetricsPane.style.display = tab === 'metrics' ? 'flex' : 'none';
   el.manageHistoryPane.style.display = tab === 'history' ? 'flex' : 'none';
   if (tab === 'yaml') loadManageYaml();
-  if (tab === 'events') loadManageEvents();
+  if (tab === 'events' && el.manageEventsPane) loadManageEvents();
   if (tab === 'access') loadManageAccess();
   if (tab === 'logs') {
-    if (el.manageLogContainer.value) startManageLogs();
+    startManageLogs();
   } else {
     stopManageLogs();
   }
@@ -3959,6 +4064,7 @@ function switchManageTab(tab) {
   // Port-forwards are independent background proxies, not tied to this pod/tab —
   // switching away must NOT stop them, only refresh the list when switching in.
   if (tab === 'portforward') {
+    populateManagePfPortPicker(state.manage.selected);
     renderManagePortForwardList();
   }
   if (tab === 'metrics') {
@@ -3976,7 +4082,6 @@ function updateManageYamlGutter(text) {
   const numbers = [];
   for (let i = 1; i <= count; i++) numbers.push(i);
   el.manageYamlGutter.textContent = numbers.join('\n');
-  el.manageYamlGutter.scrollTop = 0;
 }
 
 // In view mode the <pre> is the scroller (syncs the gutter). In edit mode the transparent
@@ -4094,18 +4199,25 @@ function renderManageYamlEditGate() {
   }
 }
 
+let yamlEditorController = null;
+
 function switchManageYamlView() {
   const editing = state.manage.yamlEditing;
-  // The highlighted <pre> is always the visible layer; in edit mode the transparent
-  // <textarea> overlays it to capture input while the <pre> shows live-highlighted text.
   el.manageYamlOutput.style.display = '';
+  el.manageYamlOutput.style.overflow = editing ? 'hidden' : 'auto';
   el.manageYamlTextarea.style.display = editing ? '' : 'none';
   el.manageYamlEdit.style.display = editing ? 'none' : '';
+  el.manageYamlDryRun.style.display = editing ? '' : 'none';
+  el.manageYamlLintBadge.style.display = editing ? '' : 'none';
   el.manageYamlSave.style.display = editing ? '' : 'none';
   el.manageYamlCancel.style.display = editing ? '' : 'none';
   el.manageYamlReload.style.display = 'none';
   el.manageYamlCopy.style.display = editing ? 'none' : '';
   el.manageYamlError.style.display = 'none';
+  if (!editing) {
+    if (el.manageYamlDiffPanel) el.manageYamlDiffPanel.style.display = 'none';
+    if (el.manageYamlConflictBar) el.manageYamlConflictBar.style.display = 'none';
+  }
 }
 
 async function enterManageYamlEdit() {
@@ -4127,15 +4239,23 @@ async function enterManageYamlEdit() {
       data.kubeconfig, data.context, manageRowNamespace(row), data.resourceType, row.name, { reveal: data.revealSecrets, forEdit: true }
     );
   }
-  if (!isSameResource(data.selected, row)) return; // stale guard — user switched rows while this was in flight
+  if (!isSameResource(data.selected, row)) return;
   if (!result.ok) {
     el.manageYamlOutput.textContent = `Error: ${result.error}`;
     updateManageYamlGutter(result.error);
     return;
   }
+
+  if (!yamlEditorController && el.manageYamlPane) {
+    yamlEditorController = initYamlEditor(el.manageYamlPane, window.k8sApi);
+  }
+  if (yamlEditorController) {
+    yamlEditorController.setContext(data.kubeconfig, data.context);
+  }
+
   data.yamlEditing = true;
   el.manageYamlTextarea.value = result.yaml;
-  el.manageYamlOutput.innerHTML = highlightYaml(result.yaml); // highlight layer matches from the first frame
+  el.manageYamlOutput.innerHTML = highlightYaml(result.yaml);
   updateManageYamlGutter(result.yaml);
   switchManageYamlView();
 }
@@ -4308,18 +4428,6 @@ async function loadManageAccess() {
     </tr>`).join('');
 }
 
-function populateManageLogContainerPicker(containers) {
-  el.manageLogContainer.innerHTML = '';
-  containers.forEach((name) => {
-    const opt = document.createElement('option');
-    opt.value = name;
-    opt.textContent = name;
-    el.manageLogContainer.appendChild(opt);
-  });
-  el.manageLogContainer.disabled = containers.length === 0;
-}
-
-
 function populateManageExecContainerPicker(containers) {
   el.manageExecContainer.innerHTML = '';
   containers.forEach((name) => {
@@ -4331,52 +4439,38 @@ function populateManageExecContainerPicker(containers) {
   el.manageExecContainer.disabled = containers.length === 0;
 }
 
-el.manageLogContainer.addEventListener('change', () => {
-  if (el.manageLogsPane.style.display === 'flex') startManageLogs();
-});
 el.manageExecContainer.addEventListener('change', () => {
   if (el.manageExecPane.style.display === 'flex') startManageExec();
 });
-
-el.manageLogFollow.addEventListener('change', () => {
-  if (el.manageLogFollow.checked) el.manageLogOutput.scrollTop = el.manageLogOutput.scrollHeight;
-});
-
-el.manageLogClear.addEventListener('click', () => { el.manageLogOutput.textContent = ''; _logLineCount = 0; });
-
-// User scrolling away from the bottom while following turns follow-tail off —
-// scrolling back down does not turn it back on, matching Lens/kubectl-like UX.
-el.manageLogOutput.addEventListener('scroll', () => {
-  if (!el.manageLogFollow.checked) return;
-  const nearBottom = el.manageLogOutput.scrollHeight - el.manageLogOutput.scrollTop - el.manageLogOutput.clientHeight < 30;
-  if (!nearBottom) el.manageLogFollow.checked = false;
-});
-
-const MANAGE_LOG_MAX_LINES = 5000;
 
 function startManageLogs() {
   stopManageLogs();
   const data = state.manage;
   const row = data.selected;
-  const container = el.manageLogContainer.value;
-  if (!row || !container) return;
+  if (!row) return;
 
   const sid = crypto.randomUUID();
-  el.manageLogOutput.textContent = '';
-  _logLineCount = 0;
+  if (!data.multiPodViewer) {
+    data.multiPodViewer = createMultiPodLogViewer(el.manageLogsPane);
+  }
 
-  // Subscribe before starting the stream so the first chunks can't race past us.
-  const disposers = [
-    window.k8sApi.onPodLogData(sid, (chunk) => appendLogBatch(chunk)),
-    window.k8sApi.onPodLogEnd(sid, () => appendLogBatch('\n[stream ended]\n')),
-    window.k8sApi.onPodLogError(sid, (msg) => appendLogBatch(`\n[error: ${msg}]\n`)),
-  ];
-  data.logSession = { sid, disposers };
+  const workload = {
+    kind: data.resourceType,
+    name: row.name,
+    matchLabels: row.matchLabels || row.selector?.matchLabels || row.spec?.selector?.matchLabels,
+  };
 
-  const tailLines = parseInt(el.manageLogTail.value, 10) || 500;
-  window.k8sApi.startPodLogs(
-    data.kubeconfig, data.context, manageRowNamespace(row), row.name, container,
-    { follow: true, tailLines, timestamps: false },
+  data.logSession = {
+    sid,
+    stop: () => data.multiPodViewer.stopSession(),
+  };
+
+  data.multiPodViewer.startSession(
+    data.kubeconfig,
+    data.context,
+    manageRowNamespace(row),
+    workload,
+    {},
     sid
   );
 }
@@ -4384,25 +4478,8 @@ function startManageLogs() {
 function stopManageLogs() {
   const session = state.manage.logSession;
   if (!session) return;
-  window.k8sApi.stopPodLogs(session.sid);
-  session.disposers.forEach((dispose) => dispose());
+  session.stop();
   state.manage.logSession = null;
-}
-
-let _logLineCount = 0;
-
-function appendLogBatch(text) {
-  const shouldFollow = el.manageLogFollow.checked;
-  _logLineCount += (text.match(/\n/g) || []).length;
-  el.manageLogOutput.textContent += text;
-  // Only do the expensive split/join when we've accumulated 20% over the limit —
-  // avoids re-parsing the entire log buffer on every single chunk.
-  if (_logLineCount > MANAGE_LOG_MAX_LINES * 1.2) {
-    const lines = el.manageLogOutput.textContent.split('\n');
-    el.manageLogOutput.textContent = lines.slice(-MANAGE_LOG_MAX_LINES).join('\n');
-    _logLineCount = MANAGE_LOG_MAX_LINES;
-  }
-  if (shouldFollow) el.manageLogOutput.scrollTop = el.manageLogOutput.scrollHeight;
 }
 
 
@@ -4479,65 +4556,208 @@ function stopManageExec() {
    Unlike logs/exec they are NOT tied to the drawer/tab/selected pod — they keep running
    while browsing other resources and are only stopped explicitly or at the teardown choke point.
    ════════════════════════════════════════════════════════════════════════════ */
+function populateManagePfPortPicker(row) {
+  if (!el.managePfTargetPort) return;
+  const containerPorts = (row && Array.isArray(row.containerPorts)) ? row.containerPorts : [];
+  const options = [];
+
+  if (containerPorts.length > 0) {
+    containerPorts.forEach((p) => {
+      const portNum = p.port || p.containerPort;
+      const targetHint = (p.targetPort && p.targetPort !== p.port) ? ` → ${p.targetPort}` : '';
+      const label = `${portNum}/${p.protocol || 'TCP'}${targetHint}${p.name ? ` (${p.name})` : ''}`;
+      options.push(`<option value="${portNum}">${escHtml(label)}</option>`);
+    });
+  } else {
+    options.push('<option value="auto">Auto detect port</option>');
+  }
+
+  options.push('<option value="custom">Custom port...</option>');
+  el.managePfTargetPort.innerHTML = options.join('');
+  if (el.managePfCustomPort) {
+    el.managePfCustomPort.style.display = 'none';
+    el.managePfCustomPort.value = '';
+  }
+
+  el.managePfTargetPort.onchange = () => {
+    if (el.managePfCustomPort) {
+      el.managePfCustomPort.style.display = el.managePfTargetPort.value === 'custom' ? '' : 'none';
+    }
+  };
+}
+
 async function startManagePortForward() {
   const data = state.manage;
   const row = data.selected;
   if (!row) return;
-  const targetPort = Number(el.managePfTargetPort.value);
-  if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
-    alert('Enter a valid pod port (1-65535).');
-    return;
-  }
-  const localPort = el.managePfLocalPort.value ? Number(el.managePfLocalPort.value) : 0;
 
+  const selVal = el.managePfTargetPort.value;
+  let targetPort = 0;
+
+  if (selVal === 'custom') {
+    const rawTarget = el.managePfCustomPort ? el.managePfCustomPort.value.trim() : '';
+    if (!rawTarget) {
+      alert('Enter a custom pod port (1-65535).');
+      return;
+    }
+    targetPort = Number(rawTarget);
+    if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+      alert('Enter a valid custom pod port (1-65535).');
+      return;
+    }
+  } else if (selVal !== 'auto' && selVal) {
+    targetPort = Number(selVal);
+  }
+
+  const rawLocal = el.managePfLocalPort.value.trim();
+  let localPort = 0;
+  if (rawLocal) {
+    localPort = Number(rawLocal);
+    if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) {
+      alert('Enter a valid local port (1-65535) or leave empty for random port.');
+      return;
+    }
+  }
+
+  const openBrowser = el.managePfOpenBrowser ? el.managePfOpenBrowser.checked : false;
   const sid = crypto.randomUUID();
   const disposer = window.k8sApi.onPortForwardError(sid, (msg) => {
     alert(`Port-forward error: ${msg}`);
     stopManagePortForward(sid);
   });
 
-  const result = await window.k8sApi.startPortForward(data.kubeconfig, data.context, manageRowNamespace(row), row.name, targetPort, localPort, sid);
+  const opts = { openBrowser };
+  const result = await window.k8sApi.startPortForward(
+    data.kubeconfig,
+    data.context,
+    manageRowNamespace(row),
+    row.name,
+    targetPort,
+    localPort,
+    sid,
+    opts
+  );
+
   if (!result.ok) {
     disposer();
-    alert(`Failed to start port-forward: ${result.error}`);
+    alert(`Failed to start port-forward: ${result.error || result.reason}`);
     return;
   }
-  data.portForwards.set(sid, { sid, pod: row.name, targetPort, localPort: result.localPort, disposer });
-  el.managePfTargetPort.value = '';
+
+  const boundTargetPort = targetPort || result.remotePort || result.containerPort || 'auto';
+  data.portForwards.set(sid, {
+    sid,
+    pod: row.name,
+    targetPort: boundTargetPort,
+    containerPort: result.containerPort,
+    localPort: result.localPort,
+    disposer,
+  });
+
   el.managePfLocalPort.value = '';
   renderManagePortForwardList();
+  loadManagePortForwardsPage();
 }
 
 function stopManagePortForward(sid) {
   const session = state.manage.portForwards.get(sid);
   if (!session) return;
   window.k8sApi.stopPortForward(sid);
-  session.disposer();
+  if (session.disposer) session.disposer();
   state.manage.portForwards.delete(sid);
   renderManagePortForwardList();
+  loadManagePortForwardsPage();
 }
 
 function stopAllManagePortForwards() {
   for (const sid of Array.from(state.manage.portForwards.keys())) stopManagePortForward(sid);
+  loadManagePortForwardsPage();
+}
+
+function loadManagePortForwardsPage() {
+  if (!el.managePortforwardsGlobalList) return;
+  const forwards = Array.from(state.manage.portForwards.values());
+
+  if (forwards.length === 0) {
+    el.managePortforwardsGlobalList.innerHTML = `
+      <div class="manage-empty" style="padding: 40px 0; text-align: center;">
+        <div style="font-size: 32px; margin-bottom: 8px;">🔌</div>
+        <div style="font-size: 14px; font-weight: 600;">No Active Port Forwards</div>
+        <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+          Start a port forward from any Pod or Service in the Workloads menu.
+        </div>
+      </div>`;
+    return;
+  }
+
+  el.managePortforwardsGlobalList.innerHTML = forwards.map((f) => `
+    <div class="manage-pf-card">
+      <div class="manage-pf-card-info">
+        <div class="manage-pf-card-title">
+          <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#22c55e; margin-right:6px;"></span>
+          localhost:${escHtml(f.localPort)} → ${escHtml(f.pod)}:${escHtml(f.targetPort)}
+        </div>
+        <div class="manage-pf-card-meta">
+          <span>Target: <strong>${escHtml(f.pod)}</strong></span>
+          <span style="margin-left: 12px;">Container Port: <strong>${escHtml(f.targetPort)}</strong></span>
+          <span style="margin-left: 12px;">Local Port: <strong>${escHtml(f.localPort)}</strong></span>
+        </div>
+      </div>
+      <div class="manage-pf-card-actions">
+        <button class="btn btn-xs btn-ghost btn-global-open-browser" data-port="${escHtml(f.localPort)}">🌐 Open Browser</button>
+        <button class="btn btn-xs btn-danger btn-global-stop" data-sid="${escHtml(f.sid)}">Stop</button>
+      </div>
+    </div>`).join('');
+
+  el.managePortforwardsGlobalList.querySelectorAll('.btn-global-stop').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      stopManagePortForward(btn.dataset.sid);
+    });
+  });
+
+  el.managePortforwardsGlobalList.querySelectorAll('.btn-global-open-browser').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      window.k8sApi.openPortForwardBrowser(btn.dataset.port);
+    });
+  });
 }
 
 function renderManagePortForwardList() {
-  const forwards = Array.from(state.manage.portForwards.values());
+  const data = state.manage;
+  const row = data.selected;
+  const allForwards = Array.from(state.manage.portForwards.values());
+
+  // Filter port-forwards to show active forwards belonging to the selected Pod
+  const forwards = row ? allForwards.filter((f) => f.pod === row.name) : allForwards;
+
   if (forwards.length === 0) {
-    el.managePfList.innerHTML = '<div class="manage-empty">No active port-forwards</div>';
+    el.managePfList.innerHTML = '<div class="manage-empty">No active port-forwards for this pod</div>';
     return;
   }
   el.managePfList.innerHTML = forwards.map((f) => `
     <div class="manage-pf-row">
       <span class="manage-pf-desc">localhost:${escHtml(f.localPort)} → ${escHtml(f.pod)}:${escHtml(f.targetPort)}</span>
-      <button class="btn btn-xs btn-ghost" data-sid="${escHtml(f.sid)}">Stop</button>
+      <div class="manage-pf-actions">
+        <button class="btn btn-xs btn-ghost btn-open-browser" data-port="${escHtml(f.localPort)}" title="Open localhost in browser">🌐 Open</button>
+        <button class="btn btn-xs btn-ghost" data-sid="${escHtml(f.sid)}">Stop</button>
+      </div>
     </div>`).join('');
+
   el.managePfList.querySelectorAll('button[data-sid]').forEach((btn) => {
     btn.addEventListener('click', () => stopManagePortForward(btn.dataset.sid));
+  });
+
+  el.managePfList.querySelectorAll('button.btn-open-browser').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      window.k8sApi.openPortForwardBrowser(btn.dataset.port);
+    });
   });
 }
 
 el.managePfStart.addEventListener('click', startManagePortForward);
+if (el.managePfGlobalStopAllBtn) {
+  el.managePfGlobalStopAllBtn.addEventListener('click', () => stopAllManagePortForwards());
+}
 
 /* ════════════════════════════════════════════════════════════════════════════
    TOKEN EXPIRY COUNTDOWN

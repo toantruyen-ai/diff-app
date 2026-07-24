@@ -51,6 +51,9 @@ The architecture, file mapping, and red lines from `implement-code-flow` still a
 - Run `node --check <file>` on every changed `.js` file.
 - **If any renderer code changed** (`renderer/app.js` or `src/renderer/*`), run `npm run build:renderer`
   so `dist/app.js` reflects the new structure.
+- **If any `src/main/` wiring changed** (IPC handler registration, `src/main/ipc/index.js`, `src/main/index.js`
+  bootstrap), run `npm run dev` and confirm the app window opens with no thrown error. `npm test` mocks
+  modules individually and will NOT catch a real wiring mismatch introduced by the restructure.
 
 ### Step 6: Document
 - Update `CHANGELOG.md` under `## Unreleased` with a `Changed:` entry noting the restructure (and that behavior is unchanged).
@@ -66,3 +69,4 @@ The architecture, file mapping, and red lines from `implement-code-flow` still a
 - ❌ **No Stale Bundles**: Renderer restructures require `npm run build:renderer`; `index.html` loads `dist/app.js`.
 - ❌ **No Broken Invariants**: Never drop `withTimeout`, audit/write-gate, teardown, or constants usage while restructuring.
 - ❌ **No Undocumented Refactor**: Never declare a refactor complete without a `Changed:` entry in `CHANGELOG.md` under `## Unreleased` (Step 6) — this is a completion gate, same as `npm test`, not an optional step.
+- ❌ **No Untested Boot**: Never declare an IPC/main-process wiring restructure done from `npm test` alone — run `npm run dev` and confirm the app boots without a thrown error.

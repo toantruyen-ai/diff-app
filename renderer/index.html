@@ -472,81 +472,9 @@
       <aside id="manage-sidebar" class="manage-sidebar">
         <div class="manage-sidebar-header">
           <button class="manage-nav-item active" data-kind="overview">Overview</button>
-          <button class="manage-nav-item" data-kind="recyclebin">♻️ Recycle Bin</button>
-          <button id="manage-settings-btn" class="manage-settings-btn" title="Settings">⚙️</button>
           <span id="manage-write-badge" class="manage-write-badge" title="Read-only — enable Audit in Settings to unlock write actions">🔒 Read-only</span>
         </div>
 
-        <!-- Settings Popover -->
-        <div id="manage-settings-popover" class="manage-settings-popover" style="display:none">
-          <div class="manage-settings-section">
-            <div class="manage-settings-section-title">Performance</div>
-            <label class="manage-settings-item"><input type="checkbox" id="manage-setting-metrics" /> Metrics (CPU/Memory)</label>
-            <label class="manage-settings-item"><input type="checkbox" id="manage-setting-autorefresh" /> Auto-Poll</label>
-          </div>
-          <div class="manage-settings-section">
-            <div class="manage-settings-section-title">Events Database</div>
-            <label class="manage-settings-item" title="Automatically watch K8s events and save to local SQLite"><input type="checkbox" id="manage-setting-event-capture" /> Auto-Capture Events</label>
-            <div class="manage-settings-sub-item">
-              <span>Retention:</span>
-              <select id="manage-setting-event-retention" class="manage-settings-select">
-                <option value="0">Keep forever</option>
-                <option value="1">1 Day</option>
-                <option value="3">3 Days</option>
-                <option value="7">7 Days</option>
-                <option value="30">30 Days</option>
-              </select>
-            </div>
-            <div style="margin-top: 6px;">
-              <button id="manage-setting-event-clear" class="btn btn-xs btn-danger" style="width: 100%;">Clear Database Now</button>
-            </div>
-          </div>
-          <div class="manage-settings-section">
-            <div class="manage-settings-section-title">Audit Database</div>
-            <label class="manage-settings-item" title="Enable audit logging to Azure SQL. Required for Edit/Delete permissions.">
-              <input type="checkbox" id="manage-setting-audit" /> Enable Audit (unlock write)
-            </label>
-            <div id="manage-audit-status" class="manage-audit-status" style="display:none"></div>
-          </div>
-          <div class="manage-settings-section">
-            <div class="manage-settings-section-title">Workloads <input type="checkbox" data-settings-group="workloads" /></div>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="pods" /> Pods</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="deployments" /> Deployments</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="statefulsets" /> StatefulSets</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="daemonsets" /> DaemonSets</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="replicasets" /> ReplicaSets</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="jobs" /> Jobs</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="cronjobs" /> CronJobs</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="services" /> Services</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="ingresses" /> Ingresses</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="configmaps" /> ConfigMaps</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="secrets" /> Secrets</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="hpas" /> HPAs</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="nodes" /> Nodes</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="pvs" /> PVs</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="namespaces" /> Namespaces</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="events" /> Events</label>
-          </div>
-          <div class="manage-settings-section">
-            <div class="manage-settings-section-title">RBAC <input type="checkbox" data-settings-group="rbac" /></div>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="serviceaccounts" /> ServiceAccounts</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="roles" /> Roles</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="rolebindings" /> RoleBindings</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="clusterroles" /> ClusterRoles</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="clusterrolebindings" /> ClusterRoleBindings</label>
-          </div>
-          <div class="manage-settings-section">
-            <div class="manage-settings-section-title">Policy &amp; Storage <input type="checkbox" data-settings-group="policy" /></div>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="networkpolicies" /> NetworkPolicies</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="storageclasses" /> StorageClasses</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="resourcequotas" /> ResourceQuotas</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="limitranges" /> LimitRanges</label>
-            <label class="manage-settings-item"><input type="checkbox" data-settings-menu="pvcs" /> PVCs</label>
-          </div>
-          <div class="manage-settings-section">
-            <div class="manage-settings-section-title">Custom Resources <input type="checkbox" data-settings-group="crd" /></div>
-          </div>
-        </div>
         <div class="manage-nav-divider">Workloads</div>
         <button class="manage-nav-item" data-kind="pods">Pods</button>
         <button class="manage-nav-item" data-kind="deployments">Deployments</button>
@@ -563,7 +491,12 @@
         <button class="manage-nav-item" data-kind="nodes">Nodes</button>
         <button class="manage-nav-item" data-kind="pvs">PVs</button>
         <button class="manage-nav-item" data-kind="namespaces">Namespaces</button>
-        <button class="manage-nav-item" data-kind="events">Events</button>
+        <div class="manage-nav-divider">Management</div>
+        <button class="manage-nav-item" data-kind="events">⚡ Events</button>
+        <button class="manage-nav-item" data-kind="clusterlogs">📜 Cluster Logs</button>
+        <button class="manage-nav-item" data-kind="portforwards">🔌 Port Forwards</button>
+        <button class="manage-nav-item" data-kind="recyclebin">♻️ Recycle Bin</button>
+        <button id="manage-settings-btn" class="manage-nav-item" data-kind="settings" title="Settings">⚙️ Settings</button>
         <div class="manage-nav-divider">RBAC</div>
         <button class="manage-nav-item" data-kind="serviceaccounts">ServiceAccounts</button>
         <button class="manage-nav-item" data-kind="roles">Roles</button>
@@ -634,6 +567,8 @@
 
         <div id="manage-overview-pane" class="manage-overview-pane" style="display:none"></div>
 
+        <div id="manage-clusterlogs-pane" class="manage-clusterlogs-pane" style="display:none;flex-direction:column;height:100%;"></div>
+
         <div id="manage-recyclebin-pane" class="manage-recyclebin-pane" style="display:none">
           <div class="manage-recyclebin-header">
             <h3>Recycle Bin</h3>
@@ -645,6 +580,164 @@
               <button id="manage-recyclebin-yaml-close" class="btn btn-xs btn-ghost">← Back to list</button>
             </div>
             <pre id="manage-recyclebin-yaml-output" class="manage-history-diff-output"></pre>
+          </div>
+        </div>
+
+        <div id="manage-portforwards-pane" class="manage-portforwards-pane" style="display:none">
+          <div class="manage-portforwards-header">
+            <div class="manage-portforwards-title-group">
+              <h3>🔌 Active Port Forwards</h3>
+              <p class="manage-portforwards-sub">Global management of all active background port-forwards across clusters and namespaces.</p>
+            </div>
+            <button id="manage-pf-global-stop-all-btn" class="btn btn-xs btn-danger">Stop All Forwards</button>
+          </div>
+          <div id="manage-portforwards-global-list" class="manage-portforwards-list"></div>
+        </div>
+
+        <div id="manage-settings-pane" class="manage-settings-pane" style="display:none">
+          <div class="manage-settings-header">
+            <h2>⚙️ Application Settings</h2>
+            <p class="manage-settings-subtitle">Configure application preferences, performance settings, database integrations, and sidebar menu visibility.</p>
+          </div>
+
+          <div class="manage-settings-grid">
+            <!-- Performance & Polling Card -->
+            <div class="manage-settings-card">
+              <div class="manage-settings-card-header">
+                <h3>⚡ Performance &amp; Metrics</h3>
+              </div>
+              <div class="manage-settings-card-body">
+                <label class="manage-settings-toggle">
+                  <input type="checkbox" id="manage-setting-metrics" />
+                  <div>
+                    <span class="manage-settings-label-title">Metrics (CPU / Memory)</span>
+                    <span class="manage-settings-label-sub">Fetch CPU and Memory metrics for Pods and Nodes</span>
+                  </div>
+                </label>
+                <label class="manage-settings-toggle">
+                  <input type="checkbox" id="manage-setting-autorefresh" />
+                  <div>
+                    <span class="manage-settings-label-title">Auto-Poll Resources</span>
+                    <span class="manage-settings-label-sub">Automatically refresh resource lists every few seconds</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <!-- Events Database Card -->
+            <div class="manage-settings-card">
+              <div class="manage-settings-card-header">
+                <h3>📜 Local Events Database</h3>
+              </div>
+              <div class="manage-settings-card-body">
+                <label class="manage-settings-toggle">
+                  <input type="checkbox" id="manage-setting-event-capture" />
+                  <div>
+                    <span class="manage-settings-label-title">Auto-Capture Events</span>
+                    <span class="manage-settings-label-sub">Watch cluster events automatically and persist to local SQLite DB</span>
+                  </div>
+                </label>
+                <div class="manage-settings-field-row">
+                  <label for="manage-setting-event-retention">Retention Period:</label>
+                  <select id="manage-setting-event-retention" class="manage-settings-select">
+                    <option value="0">Keep forever</option>
+                    <option value="1">1 Day</option>
+                    <option value="3">3 Days</option>
+                    <option value="7">7 Days</option>
+                    <option value="30">30 Days</option>
+                  </select>
+                </div>
+                <div style="margin-top: 8px;">
+                  <button id="manage-setting-event-clear" class="btn btn-xs btn-danger">Clear Database Now</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Audit Database Card -->
+            <div class="manage-settings-card">
+              <div class="manage-settings-card-header">
+                <h3>🔒 Audit Database &amp; Write Access</h3>
+              </div>
+              <div class="manage-settings-card-body">
+                <label class="manage-settings-toggle">
+                  <input type="checkbox" id="manage-setting-audit" />
+                  <div>
+                    <span class="manage-settings-label-title">Enable Audit Logging (Azure SQL)</span>
+                    <span class="manage-settings-label-sub">Required to unlock write actions (edit YAML, delete, scale, restart)</span>
+                  </div>
+                </label>
+                <div id="manage-audit-status" class="manage-audit-status" style="display:none"></div>
+              </div>
+            </div>
+
+            <!-- Sidebar Menu Visibility Card -->
+            <div class="manage-settings-card manage-settings-card-full">
+              <div class="manage-settings-card-header">
+                <h3>📌 Sidebar Menu Visibility</h3>
+                <span class="manage-settings-card-subtitle">Select which resource kinds to display in the left sidebar navigation menu.</span>
+              </div>
+              <div class="manage-settings-card-body manage-settings-visibility-grid">
+
+                <div class="manage-settings-group-col">
+                  <div class="manage-settings-section-title">
+                    <span>Workloads</span>
+                    <input type="checkbox" data-settings-group="workloads" />
+                  </div>
+                  <div class="manage-settings-items-list">
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="pods" /> Pods</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="deployments" /> Deployments</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="statefulsets" /> StatefulSets</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="daemonsets" /> DaemonSets</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="replicasets" /> ReplicaSets</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="jobs" /> Jobs</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="cronjobs" /> CronJobs</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="services" /> Services</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="ingresses" /> Ingresses</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="configmaps" /> ConfigMaps</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="secrets" /> Secrets</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="hpas" /> HPAs</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="nodes" /> Nodes</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="pvs" /> PVs</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="namespaces" /> Namespaces</label>
+                  </div>
+                </div>
+
+                <div class="manage-settings-group-col">
+                  <div class="manage-settings-section-title">
+                    <span>RBAC</span>
+                    <input type="checkbox" data-settings-group="rbac" />
+                  </div>
+                  <div class="manage-settings-items-list">
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="serviceaccounts" /> ServiceAccounts</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="roles" /> Roles</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="rolebindings" /> RoleBindings</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="clusterroles" /> ClusterRoles</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="clusterrolebindings" /> ClusterRoleBindings</label>
+                  </div>
+                </div>
+
+                <div class="manage-settings-group-col">
+                  <div class="manage-settings-section-title">
+                    <span>Policy &amp; Storage</span>
+                    <input type="checkbox" data-settings-group="policy" />
+                  </div>
+                  <div class="manage-settings-items-list">
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="networkpolicies" /> NetworkPolicies</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="storageclasses" /> StorageClasses</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="resourcequotas" /> ResourceQuotas</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="limitranges" /> LimitRanges</label>
+                    <label class="manage-settings-item"><input type="checkbox" data-settings-menu="pvcs" /> PVCs</label>
+                  </div>
+
+                  <div class="manage-settings-section-title" style="margin-top: 16px;">
+                    <span>Custom Resources</span>
+                    <input type="checkbox" data-settings-group="crd" />
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -667,7 +760,6 @@
         <nav class="manage-drawer-tabs">
           <button class="manage-tab active" data-tab="detail">Detail</button>
           <button class="manage-tab" data-tab="yaml">YAML</button>
-          <button class="manage-tab" data-tab="events">Events</button>
           <button class="manage-tab" data-tab="access">Access</button>
           <button class="manage-tab" data-tab="logs">Logs</button>
           <button class="manage-tab" data-tab="exec">Exec</button>
@@ -681,27 +773,23 @@
             <label id="manage-yaml-reveal-label" class="manage-yaml-reveal-label" style="display:none">
               <input type="checkbox" id="manage-yaml-reveal" /> Reveal secret values
             </label>
+            <span id="manage-yaml-lint-badge" class="badge badge-ghost" style="display:none">Valid</span>
             <button id="manage-yaml-copy" class="btn btn-xs btn-ghost">Copy</button>
             <button id="manage-yaml-edit" class="btn btn-xs btn-ghost">Edit</button>
+            <button id="manage-yaml-dryrun" class="btn btn-xs btn-outline" style="display:none">Dry-Run</button>
             <button id="manage-yaml-save" class="btn btn-xs btn-primary" style="display:none">Save &amp; Apply</button>
             <button id="manage-yaml-cancel" class="btn btn-xs btn-ghost" style="display:none">Cancel</button>
             <button id="manage-yaml-reload" class="btn btn-xs btn-ghost" style="display:none">Reload</button>
           </div>
           <div id="manage-yaml-error" class="manage-yaml-error" style="display:none"></div>
+          <div id="manage-yaml-conflict-bar" class="manage-yaml-conflict-bar" style="display:none"></div>
+          <div id="manage-yaml-diff-panel" class="manage-yaml-diff-panel" style="display:none"></div>
           <div class="manage-yaml-body">
             <pre id="manage-yaml-gutter" class="manage-yaml-gutter"></pre>
             <div class="manage-yaml-content">
               <pre id="manage-yaml-output" class="manage-yaml-output"></pre>
               <textarea id="manage-yaml-textarea" class="manage-yaml-output manage-yaml-textarea" style="display:none" spellcheck="false"></textarea>
             </div>
-          </div>
-        </div>
-        <div id="manage-events-pane" class="manage-events-pane" style="display:none">
-          <div class="sdr-table-wrap">
-            <table class="sdr-table">
-              <thead id="manage-events-thead"></thead>
-              <tbody id="manage-events-tbody"></tbody>
-            </table>
           </div>
         </div>
         <div id="manage-access-pane" class="manage-access-pane" style="display:none">
@@ -712,17 +800,7 @@
             </table>
           </div>
         </div>
-        <div id="manage-logs-pane" class="manage-logs-pane" style="display:none">
-          <div class="manage-log-toolbar">
-            <select id="manage-log-container"></select>
-            <label class="manage-log-follow-label">
-              <input type="checkbox" id="manage-log-follow" checked /> Follow
-            </label>
-            <input type="number" id="manage-log-tail" value="500" min="1" title="Tail lines" />
-            <button id="manage-log-clear" class="btn btn-xs btn-ghost">Clear</button>
-          </div>
-          <pre id="manage-log-output" class="manage-log-output"></pre>
-        </div>
+        <div id="manage-logs-pane" class="manage-logs-pane" style="display:none;flex-direction:column;height:100%;"></div>
         <div id="manage-exec-pane" class="manage-exec-pane" style="display:none">
           <div class="manage-exec-toolbar">
             <select id="manage-exec-container"></select>
@@ -732,8 +810,12 @@
         </div>
         <div id="manage-pf-pane" class="manage-pf-pane" style="display:none">
           <div class="manage-pf-toolbar">
-            <input type="number" id="manage-pf-target-port" placeholder="Pod port" min="1" max="65535" />
-            <input type="number" id="manage-pf-local-port" placeholder="Local port (optional)" min="1" max="65535" />
+            <select id="manage-pf-target-port" class="select select-xs" title="Detected container ports"></select>
+            <input type="number" id="manage-pf-custom-port" placeholder="Custom port" min="1" max="65535" style="display:none; width:110px;" />
+            <input type="number" id="manage-pf-local-port" placeholder="Local port (Random >=30000)" min="1" max="65535" title="Leave empty for random free port >= 30000" />
+            <label class="manage-pf-checkbox-label" title="Auto open browser on localhost when connected">
+              <input type="checkbox" id="manage-pf-open-browser" /> Open browser
+            </label>
             <button id="manage-pf-start" class="btn btn-xs btn-primary">Start forward</button>
           </div>
           <div id="manage-pf-list" class="manage-pf-list"></div>

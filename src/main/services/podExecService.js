@@ -1,99 +1,149 @@
 const { Writable, PassThrough } = require('stream');
 const k8s = require('@kubernetes/client-node');
 const { buildKubeConfig } = require('../utils/k8sHelper');
+const { sessionManager } = require('./sessionManagerService');
 
-const execSessions = new Map();
-
-function stopExecSession(sid) {
-  const session = execSessions.get(sid);
-  if (!session) return;
-  try { session.stdin.end(); } catch { /* already closed */ }
-  try { session.ws && session.ws.close(); } catch { /* already closed */ }
-  execSessions.delete(sid);
+function stopExecSession(sid, getMainWindow = null) {
+  sessionManager.removeSession(sid, getMainWindow);
 }
 
-function stopAllExecSessions() {
-  for (const sid of execSessions.keys()) {
-    stopExecSession(sid);
+function stopAllExecSessions(getMainWindow = null) {
+  for (const session of sessionManager.sessions.values()) {
+    if (session.kind === 'exec') {
+      stopExecSession(session.id, getMainWindow);
+    }
   }
 }
 
-async function execStart(ref, contextName, namespace, pod, container, sid, getMainWindow) {
-  stopExecSession(sid);
+async function execStart(ref, contextName, namespace, pod, container, sid, getMainWindow, shellCmd) {
+  stopExecSession(sid, getMainWindow);
 
-  const sendIfAlive = (channel, ...args) => {
-    const win = getMainWindow ? getMainWindow() : null;
-    if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
-  };
+  sessionManager.emitSessionEvent(
+    { kind: 'exec', type: 'status', sessionId: sid, status: 'connecting' },
+    getMainWindow
+  );
 
   const stdin = new PassThrough();
   const stdout = new Writable({
     write(chunk, _enc, callback) {
-      sendIfAlive(`exec-data:${sid}`, chunk.toString('utf8'));
+      try {
+        const win = getMainWindow ? getMainWindow() : null;
+        if (win && !win.isDestroyed() && win.webContents && (typeof win.webContents.isDestroyed !== 'function' || !win.webContents.isDestroyed())) {
+          win.webContents.send(`exec-data:${sid}`, chunk.toString('utf8'));
+        }
+      } catch (err) {
+        console.error(`Error sending exec-data for session ${sid}:`, err);
+      }
       callback();
     },
   });
   stdout.rows = 24;
   stdout.columns = 80;
 
-  const session = { stdin, stdout, ws: null };
-  execSessions.set(sid, session);
+  const command = shellCmd
+    ? [shellCmd]
+    : ['/bin/sh', '-c', 'exec /bin/bash || exec /bin/sh'];
 
   try {
     const kc = buildKubeConfig(ref, contextName);
     const execApi = new k8s.Exec(kc);
+
     const ws = await execApi.exec(
       namespace,
       pod,
       container,
-      ['/bin/sh', '-c', 'exec /bin/bash || exec /bin/sh'],
+      command,
       stdout,
       stdout,
       stdin,
       true,
       (status) => {
-        sendIfAlive(`exec-exit:${sid}`, status);
-        stopExecSession(sid);
+        try {
+          const win = getMainWindow ? getMainWindow() : null;
+          if (win && !win.isDestroyed() && win.webContents && (typeof win.webContents.isDestroyed !== 'function' || !win.webContents.isDestroyed())) {
+            win.webContents.send(`exec-exit:${sid}`, status);
+          }
+        } catch (err) {
+          console.error(`Error sending exec-exit for session ${sid}:`, err);
+        }
+        sessionManager.emitSessionEvent(
+          { kind: 'exec', type: 'exit', sessionId: sid, exitCode: status.code || 0, status: 'closed' },
+          getMainWindow
+        );
+        stopExecSession(sid, getMainWindow);
       }
     );
-    if (!execSessions.has(sid)) {
-      try { ws.close(); } catch { /* ignore */ }
-      return { ok: true };
-    }
-    session.ws = ws;
+
+    const execSession = {
+      id: sid,
+      kind: 'exec',
+      status: 'active',
+      metadata: { context: contextName, namespace, pod, container, createdAt: new Date().toISOString() },
+      stdin,
+      stdout,
+      ws,
+      describe() {
+        return {
+          sessionId: sid,
+          kind: 'exec',
+          status: this.status,
+          metadata: this.metadata,
+        };
+      },
+      dispose() {
+        try { stdin.end(); } catch { /* ignore */ }
+        try { if (ws) ws.close(); } catch { /* ignore */ }
+      },
+    };
+
+    sessionManager.registerSession(execSession);
+    sessionManager.emitSessionEvent(
+      { kind: 'exec', type: 'status', sessionId: sid, status: 'active' },
+      getMainWindow
+    );
+
     ws.on('error', (err) => {
-      sendIfAlive(`exec-exit:${sid}`, { status: 'Failure', message: err.message });
-      stopExecSession(sid);
+      sessionManager.emitSessionEvent(
+        { kind: 'exec', type: 'status', sessionId: sid, status: 'error', message: err.message },
+        getMainWindow
+      );
+      stopExecSession(sid, getMainWindow);
     });
-    ws.on('close', () => stopExecSession(sid));
-    return { ok: true };
+
+    ws.on('close', () => stopExecSession(sid, getMainWindow));
+
+    return { ok: true, sessionId: sid };
   } catch (e) {
-    stopExecSession(sid);
-    sendIfAlive(`exec-exit:${sid}`, { status: 'Failure', message: e.message });
+    sessionManager.emitSessionEvent(
+      { kind: 'exec', type: 'status', sessionId: sid, status: 'error', message: e.message },
+      getMainWindow
+    );
+    stopExecSession(sid, getMainWindow);
     return { ok: false, error: e.message };
   }
 }
 
 function execWrite(sid, data) {
-  const session = execSessions.get(sid);
-  if (session) session.stdin.write(data);
+  const session = sessionManager.getSession(sid);
+  if (session && session.stdin) {
+    session.stdin.write(data);
+  }
 }
 
 function execResize(sid, cols, rows) {
-  const session = execSessions.get(sid);
-  if (!session) return;
+  const session = sessionManager.getSession(sid);
+  if (!session || !session.stdout) return;
   session.stdout.columns = cols;
   session.stdout.rows = rows;
   session.stdout.emit('resize');
 }
 
-async function execStop(sid) {
-  stopExecSession(sid);
+async function execStop(sid, getMainWindow = null) {
+  stopExecSession(sid, getMainWindow);
   return { ok: true };
 }
 
 module.exports = {
-  execSessions,
   stopExecSession,
   stopAllExecSessions,
   execStart,

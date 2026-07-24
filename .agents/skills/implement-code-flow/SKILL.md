@@ -154,6 +154,10 @@ and shells out to `az` / `kubelogin` / `kubectl`. Treat everything crossing the 
 - Run `node --check <file>` syntax verification on changed `.js` files.
 - **If any renderer code changed** (`renderer/app.js` or `src/renderer/*`), run `npm run build:renderer`
   so `dist/app.js` reflects the change — tests passing does NOT prove the app updated.
+- **If any `src/main/` wiring changed** (new/changed IPC handler, `src/main/ipc/index.js`, `src/main/index.js`
+  bootstrap), run `npm run dev` and confirm the app window opens with no thrown error in the console.
+  `npm test` mocks each module in isolation and will NOT catch a real wiring mismatch (e.g. a handler
+  registered with the wrong call signature, an undefined dependency at bootstrap).
 - Update `CHANGELOG.md` under `## Unreleased`.
 
 ## 3. Rules & Red Lines
@@ -173,3 +177,4 @@ and shells out to `az` / `kubelogin` / `kubectl`. Treat everything crossing the 
 - ❌ **No Leaked Secrets**: Never log or return un-redacted tokens/kubeconfigs/Secret values; route Secret payloads through `redactSecretData` (§1c).
 - ❌ **No SQL Concatenation**: Audit-DB queries must be parameterized (`request.input(...)`), never string-built (§1c).
 - ❌ **No Undocumented Change**: Never declare a feature/change complete without an entry in `CHANGELOG.md` under `## Unreleased` (Step 5) — this is a completion gate, same as `npm test`, not an optional step.
+- ❌ **No Untested Boot**: Never declare an IPC/main-process wiring change done from `npm test` alone — passing mocked unit tests does not prove the real registration call graph works. Run `npm run dev` and confirm the app boots without a thrown error.

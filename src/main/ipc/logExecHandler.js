@@ -27,14 +27,6 @@ function registerLogExecHandlers(getMainWindow) {
   ipcMain.handle('exec-stop', (_e, sid) =>
     podExecService.execStop(sid)
   );
-
-  ipcMain.handle('pf-start', (_e, ref, contextName, namespace, pod, targetPort, localPort, sid) =>
-    portForwardService.pfStart(ref, contextName, namespace, pod, targetPort, localPort, sid, getMainWindow)
-  );
-
-  ipcMain.handle('pf-stop', (_e, sid) =>
-    portForwardService.pfStop(sid)
-  );
 }
 
 module.exports = {

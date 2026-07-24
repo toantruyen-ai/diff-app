@@ -12,5 +12,5 @@ This is a short alias for `refactor-code-flow`.
 2. Run existing tests GREEN first — if none, write characterization tests pinning current behavior.
 3. Freeze public contracts: IPC channels, `window.k8sApi`, return shapes `{ ok, error, reason }`.
 4. Refactor in small reversible steps (prefer `serena` for renames/moves); stay green after each step.
-5. Safety-net tests must pass UNCHANGED; run full `npm test` (100%); `node --check`; `npm run build:renderer` if renderer changed.
+5. Safety-net tests must pass UNCHANGED; run full `npm test` (100%); `node --check`; `npm run build:renderer` if renderer changed; if IPC/main wiring changed, also run `npm run dev` and confirm the app boots with no thrown error.
 6. Add a `Changed:` entry to `CHANGELOG.md`; update the architecture map in `CLAUDE.md` if layout changed.

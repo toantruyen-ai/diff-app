@@ -25,8 +25,14 @@ async function seedAndWatch(sid, ref, contextName, namespace, kind, getMainWindo
   const session = watchSessions.get(sid);
   if (!session || session.stopped) return;
   const sendIfAlive = (channel, ...args) => {
-    const win = getMainWindow ? getMainWindow() : null;
-    if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
+    try {
+      const win = getMainWindow ? getMainWindow() : null;
+      if (win && !win.isDestroyed() && win.webContents && (typeof win.webContents.isDestroyed !== 'function' || !win.webContents.isDestroyed())) {
+        win.webContents.send(channel, ...args);
+      }
+    } catch (err) {
+      console.error(`Error sending from webFrameMain on channel ${channel}:`, err);
+    }
   };
   let body;
   try {

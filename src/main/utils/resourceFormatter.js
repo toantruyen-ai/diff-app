@@ -45,6 +45,14 @@ function projectRow(kind, item) {
         node: item.spec?.nodeName || '',
         age: ageOf(meta.creationTimestamp),
         containers: (item.spec?.containers || []).map((c) => c.name),
+        containerPorts: (item.spec?.containers || []).flatMap((c) =>
+          (c.ports || []).map((p) => ({
+            container: c.name,
+            containerPort: p.containerPort,
+            protocol: p.protocol || 'TCP',
+            name: p.name || '',
+          }))
+        ),
       };
     }
     case 'deployments': {
@@ -57,6 +65,7 @@ function projectRow(kind, item) {
         upToDate: status.updatedReplicas || 0,
         available: status.availableReplicas || 0,
         age: ageOf(meta.creationTimestamp),
+        matchLabels: spec.selector?.matchLabels,
       };
     }
     case 'statefulsets': {
@@ -67,9 +76,11 @@ function projectRow(kind, item) {
         name: meta.name,
         ready: `${status.readyReplicas || 0}/${spec.replicas ?? 0}`,
         age: ageOf(meta.creationTimestamp),
+        matchLabels: spec.selector?.matchLabels,
       };
     }
     case 'daemonsets': {
+      const spec = item.spec || {};
       const status = item.status || {};
       return {
         ...base,
@@ -78,6 +89,7 @@ function projectRow(kind, item) {
         current: status.currentNumberScheduled || 0,
         ready: status.numberReady || 0,
         age: ageOf(meta.creationTimestamp),
+        matchLabels: spec.selector?.matchLabels,
       };
     }
     case 'replicasets': {
@@ -90,6 +102,7 @@ function projectRow(kind, item) {
         current: status.replicas || 0,
         ready: status.readyReplicas || 0,
         age: ageOf(meta.creationTimestamp),
+        matchLabels: spec.selector?.matchLabels,
       };
     }
     case 'services': {
@@ -106,6 +119,13 @@ function projectRow(kind, item) {
         externalIp: [...(spec.externalIPs || []), ...lbIngress].join(', '),
         ports,
         age: ageOf(meta.creationTimestamp),
+        containerPorts: (spec.ports || []).map((p) => ({
+          port: p.port,
+          targetPort: p.targetPort,
+          containerPort: p.targetPort || p.port,
+          protocol: p.protocol || 'TCP',
+          name: p.name || '',
+        })),
       };
     }
     case 'ingresses': {

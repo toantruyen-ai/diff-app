@@ -4,7 +4,10 @@ const { registerAzureHandlers } = require('./azureHandler');
 const { registerResourceHandlers } = require('./resourceHandler');
 const { registerWatchHandlers } = require('./watchHandler');
 const { registerLogExecHandlers } = require('./logExecHandler');
+const { registerMultiPodLogHandlers } = require('./multiPodLogHandler');
 const { registerAuditHandlers } = require('./auditHandler');
+const { registerYamlHandler } = require('./yamlHandler');
+const { registerDebugHandlers } = require('./debugHandler');
 
 function registerAllIpcHandlers(getMainWindow) {
   registerAppHandlers();
@@ -13,7 +16,10 @@ function registerAllIpcHandlers(getMainWindow) {
   registerResourceHandlers();
   registerWatchHandlers(getMainWindow);
   registerLogExecHandlers(getMainWindow);
+  registerMultiPodLogHandlers(getMainWindow);
   registerAuditHandlers();
+  registerYamlHandler();
+  registerDebugHandlers(getMainWindow);
 }
 
 module.exports = {

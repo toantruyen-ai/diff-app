@@ -13,3 +13,4 @@ This is a short alias for `implement-code-flow`.
 3. Write/update unit test in `tests/unit/`.
 4. Implement code modularly. **Security §1c**: validate renderer input (allow-list identifiers); no shell interpolation (`execFile`/arg-arrays, `shell:false`); redact secrets via `redactSecretData`; parameterized SQL; never expose raw `ipcRenderer`.
 5. Run `npm test` and verify 100% pass before finishing.
+6. If IPC handler registration or `src/main/index.js` bootstrap changed, run `npm run dev` and confirm the app boots with no thrown error — `npm test` mocks modules individually and won't catch a real wiring mismatch.

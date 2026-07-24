@@ -46,6 +46,9 @@ building something **new**. The architecture, file mapping, and red lines from `
 - Run `node --check <file>` on every changed `.js` file.
 - **If any renderer code changed** (`renderer/app.js` or `src/renderer/*`), run `npm run build:renderer`
   so `dist/app.js` reflects the fix — passing tests do NOT prove the app updated.
+- **If any `src/main/` wiring changed** (IPC handler registration, `src/main/ipc/index.js`, `src/main/index.js`
+  bootstrap), run `npm run dev` and confirm the app window opens with no thrown error. `npm test` mocks
+  modules individually and will NOT catch a real wiring mismatch between layers.
 
 ### Step 6: Document
 - Update `CHANGELOG.md` under `## Unreleased` with a `Fixed:` entry describing the symptom and root cause.
@@ -60,3 +63,4 @@ building something **new**. The architecture, file mapping, and red lines from `
 - ❌ **No Stale Bundles**: Renderer fixes require `npm run build:renderer`; `index.html` loads `dist/app.js`, not `app.js`.
 - ❌ **No Regression on Mutations**: Never remove or bypass the audit/write-gate path while fixing a mutation bug.
 - ❌ **No Undocumented Fix**: Never declare a bug fixed without a `Fixed:` entry in `CHANGELOG.md` under `## Unreleased` (Step 6) — this is a completion gate, same as `npm test`, not an optional step.
+- ❌ **No Untested Boot**: Never declare an IPC/main-process wiring fix done from `npm test` alone — run `npm run dev` and confirm the app boots without a thrown error.

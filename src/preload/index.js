@@ -33,6 +33,12 @@ function exposePreloadApi(customElectron) {
     getResourceYaml: (ref, ctx, ns, kind, name, opts) => ipcRenderer.invoke('get-resource-yaml', ref, ctx, ns, kind, name, opts),
     applyResourceYaml: (ref, ctx, ns, kind, name, yamlText, resourceVersion) =>
       ipcRenderer.invoke('apply-resource-yaml', ref, ctx, ns, kind, name, yamlText, resourceVersion),
+    dryRunYaml: (ref, ctx, yamlText) => ipcRenderer.invoke('dry-run-yaml', ref, ctx, yamlText),
+    applySsaYaml: (ref, ctx, yamlText, force) => ipcRenderer.invoke('apply-ssa-yaml', ref, ctx, yamlText, force),
+    dryRunBatchYaml: (ref, ctx, yamlText) => ipcRenderer.invoke('dry-run-batch-yaml', ref, ctx, yamlText),
+    applyBatchYaml: (ref, ctx, yamlText, force) => ipcRenderer.invoke('apply-batch-yaml', ref, ctx, yamlText, force),
+    lintYaml: (yamlText) => ipcRenderer.invoke('lint-yaml', yamlText),
+    mapYamlPos: (yamlText, path) => ipcRenderer.invoke('map-yaml-pos', yamlText, path),
     getResourceEvents: (ref, ctx, ns, kind, name) => ipcRenderer.invoke('get-resource-events', ref, ctx, ns, kind, name),
     resourceAction: (ref, ctx, ns, kind, name, action, payload) =>
       ipcRenderer.invoke('resource-action', ref, ctx, ns, kind, name, action, payload),
@@ -54,9 +60,10 @@ function exposePreloadApi(customElectron) {
     customResourceAction: (ref, ctx, ns, group, version, plural, name, namespaced, action) =>
       ipcRenderer.invoke('custom-resource-action', ref, ctx, ns, group, version, plural, name, namespaced, action),
 
-    startPortForward: (ref, ctx, ns, pod, targetPort, localPort, sid) =>
-      ipcRenderer.invoke('pf-start', ref, ctx, ns, pod, targetPort, localPort, sid),
-    stopPortForward: (sid) => ipcRenderer.invoke('pf-stop', sid),
+    startPortForward: (ref, ctx, ns, pod, targetPort, localPort, sid, opts) =>
+      ipcRenderer.invoke('pf:start', ref, ctx, ns, pod, targetPort, localPort, sid, opts),
+    stopPortForward: (sid) => ipcRenderer.invoke('pf:stop', sid),
+    openPortForwardBrowser: (localPort) => ipcRenderer.invoke('pf:open-browser', localPort),
     
     toggleEventCapture: (params) => ipcRenderer.invoke('toggle-event-capture', params),
 
@@ -131,6 +138,43 @@ function exposePreloadApi(customElectron) {
       const handler = (_e, payload) => cb(payload);
       ipcRenderer.on(`watch-error:${sid}`, handler);
       return () => ipcRenderer.removeListener(`watch-error:${sid}`, handler);
+    },
+
+    startMultiPodLogs: (ref, ctx, ns, workload, opts, sid) =>
+      ipcRenderer.invoke('multi-pod-log-start', ref, ctx, ns, workload, opts, sid),
+    stopMultiPodLogs: (sid) => ipcRenderer.invoke('multi-pod-log-stop', sid),
+    updateMultiPodLogTail: (sid, tailLines) => ipcRenderer.invoke('multi-pod-log-update-tail', sid, tailLines),
+    setMultiPodLogStreamEnabled: (sid, streamKey, enabled) =>
+      ipcRenderer.invoke('multi-pod-log-set-stream-enabled', sid, streamKey, enabled),
+    setMultiPodLogBackpressure: (sid, mode) =>
+      ipcRenderer.invoke('multi-pod-log-set-backpressure', sid, mode),
+
+    onMultiPodLogBatch: (sid, cb) => {
+      const handler = (_e, batch) => cb(batch);
+      ipcRenderer.on(`multi-pod-log-batch:${sid}`, handler);
+      return () => ipcRenderer.removeListener(`multi-pod-log-batch:${sid}`, handler);
+    },
+    onMultiPodLogTopology: (sid, cb) => {
+      const handler = (_e, topology) => cb(topology);
+      ipcRenderer.on(`multi-pod-log-topology:${sid}`, handler);
+      return () => ipcRenderer.removeListener(`multi-pod-log-topology:${sid}`, handler);
+    },
+    onMultiPodLogStatus: (sid, cb) => {
+      const handler = (_e, status) => cb(status);
+      ipcRenderer.on(`multi-pod-log-status:${sid}`, handler);
+      return () => ipcRenderer.removeListener(`multi-pod-log-status:${sid}`, handler);
+    },
+
+    listSessions: () => ipcRenderer.invoke('session:list'),
+    stopSession: (sid) => ipcRenderer.invoke('session:stop', sid),
+    injectEphemeralContainer: (ref, ctx, ns, pod, targetContainer, image) =>
+      ipcRenderer.invoke('debug:inject-ephemeral', ref, ctx, ns, pod, targetContainer, image),
+    copyPodToDebug: (ref, ctx, ns, podName, containerToOverride, image, command) =>
+      ipcRenderer.invoke('debug:copy-to', ref, ctx, ns, podName, containerToOverride, image, command),
+    onSessionEvent: (cb) => {
+      const handler = (_e, ev) => cb(ev);
+      ipcRenderer.on('session:event', handler);
+      return () => ipcRenderer.removeListener('session:event', handler);
     },
   });
 }

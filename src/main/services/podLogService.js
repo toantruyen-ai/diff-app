@@ -22,8 +22,14 @@ async function startPodLogs(ref, contextName, namespace, pod, container, opts, s
   stopLogSession(sid);
 
   const sendIfAlive = (channel, ...args) => {
-    const win = getMainWindow ? getMainWindow() : null;
-    if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
+    try {
+      const win = getMainWindow ? getMainWindow() : null;
+      if (win && !win.isDestroyed() && win.webContents && (typeof win.webContents.isDestroyed !== 'function' || !win.webContents.isDestroyed())) {
+        win.webContents.send(channel, ...args);
+      }
+    } catch (err) {
+      console.error(`Error sending from webFrameMain on channel ${channel}:`, err);
+    }
   };
 
   const session = { buffer: '', flushTimer: null, req: null };

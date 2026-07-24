@@ -5,6 +5,7 @@ const os = require('os');
 const { registerAllIpcHandlers } = require('./ipc');
 const { stopAllWatchSessions } = require('./services/watchService');
 const { stopAllLogSessions } = require('./services/podLogService');
+const { stopAllMultiPodLogSessions } = require('./services/multiPodLogService');
 const { stopAllExecSessions } = require('./services/podExecService');
 const { stopAllPortForwardSessions } = require('./services/portForwardService');
 const { stopEventWatch } = require('./services/eventsService');
@@ -85,6 +86,7 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     stopAllLogSessions();
+    stopAllMultiPodLogSessions();
     stopAllExecSessions();
     stopAllPortForwardSessions();
     stopAllWatchSessions();
