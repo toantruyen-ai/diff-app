@@ -4,6 +4,8 @@ const { highlightYaml } = require('../src/renderer/utils/yamlHighlighter');
 const { getSourceClass, computeEnvDiffRows } = require('../src/renderer/utils/envDiffComputer');
 const { createMultiPodLogViewer } = require('../src/renderer/utils/multiPodLogViewer');
 const { initYamlEditor } = require('../src/renderer/utils/yamlEditor');
+const { renderAnalysisResult, renderAnalysisHistoryTable } = require('../src/renderer/utils/troubleshootingView');
+const { isAzureAuthError, handleAzureAuthError } = require('../src/renderer/utils/azureAuthHelper');
 
 /* ── State ───────────────────────────────────────────────────────────────── */
 const state = {
@@ -47,6 +49,7 @@ const state = {
     enableAutoRefresh: false,  // toggle auto-refresh polling
     enableEventCapture: false, // toggle auto-capturing events to SQLite
     eventRetention: 0,         // retention policy in days (0 = forever)
+    aiProvider: 'claude',     // 'claude' or 'antigravity'
     menuVisibility: {
       // Workloads — default ON for essentials
       pods: true, deployments: true, statefulsets: false, daemonsets: false,
@@ -241,6 +244,17 @@ const el = {
   managePortforwardsGlobalList: $('manage-portforwards-global-list'),
   managePfGlobalStopAllBtn:     $('manage-pf-global-stop-all-btn'),
   manageMetricsPane:    $('manage-metrics-pane'),
+  manageAnalyzePane:    $('manage-analyze-pane'),
+  manageAnalyzeRunBtn:  $('manage-analyze-run-btn'),
+  manageAnalyzeStatus:  $('manage-analyze-status'),
+  manageAnalyzeContent: $('manage-analyze-content'),
+  manageAianalyzeGlobalPane: $('manage-aianalyze-global-pane'),
+  manageAianalyzeGlobalList: $('manage-aianalyze-global-list'),
+  manageAianalyzeClearAllBtn: $('manage-aianalyze-clear-all-btn'),
+  manageSettingAiProvider:   $('manage-setting-ai-provider'),
+  manageSettingAiTestBtn:    $('manage-setting-ai-test-btn'),
+  manageSettingAiTestStatus: $('manage-setting-ai-test-status'),
+  manageSettingAiTestResult: $('manage-setting-ai-test-result'),
   manageConfirmOverlay: $('manage-confirm-overlay'),
   manageConfirmTitle:   $('manage-confirm-title'),
   manageConfirmBody:    $('manage-confirm-body'),
@@ -438,7 +452,7 @@ async function loadNamespaces(side) {
     populateSelect(s.namespace, ns, '— select namespace —');
     s.namespace.disabled = false;
 
-    const defaultNs = ns.includes('brand') ? 'brand' : null;
+    const defaultNs = ns.includes('brand') ? 'brand' : (ns.includes('default') ? 'default' : (ns.length > 0 ? ns[0] : null));
     if (defaultNs) {
       s.namespace.value = defaultNs;
       data.namespace = defaultNs;
@@ -1029,7 +1043,9 @@ async function loadClusterList() {
   hideLoading();
 
   if (!result.ok) {
-    el.clusterList.innerHTML = `<div class="cs-error">Failed to load clusters:<br>${escHtml(result.error)}</div>`;
+    if (!handleAzureAuthError(result.error, showAuthModal)) {
+      el.clusterList.innerHTML = `<div class="cs-error">Failed to load clusters:<br>${escHtml(result.error)}</div>`;
+    }
     return;
   }
   if (result.clusters.length === 0) {
@@ -1144,7 +1160,9 @@ el.btnCompareClusters.addEventListener('click', async () => {
     showView('k8s-diff');
   } catch (e) {
     hideLoading();
-    alert(e.message);
+    if (!handleAzureAuthError(e, showAuthModal)) {
+      alert(e.message);
+    }
     el.btnCompareClusters.disabled = false;
   }
 });
@@ -1641,7 +1659,9 @@ async function loadManageClusterList() {
   hideLoading();
 
   if (!result.ok) {
-    el.manageClusterList.innerHTML = `<div class="cs-error">Failed to load clusters:<br>${escHtml(result.error)}</div>`;
+    if (!handleAzureAuthError(result.error, showAuthModal)) {
+      el.manageClusterList.innerHTML = `<div class="cs-error">Failed to load clusters:<br>${escHtml(result.error)}</div>`;
+    }
     return;
   }
   if (result.clusters.length === 0) {
@@ -1666,7 +1686,9 @@ el.btnManageContinue.addEventListener('click', async () => {
     await enterManageWorkspace(cred.kubeconfigId);
   } catch (e) {
     hideLoading();
-    alert(e.message);
+    if (!handleAzureAuthError(e, showAuthModal)) {
+      alert(e.message);
+    }
     el.btnManageContinue.disabled = false;
   }
 });
@@ -1736,16 +1758,19 @@ async function loadManageNamespaces() {
     el.manageNamespace.firstElementChild.after(allOpt);
     el.manageNamespace.disabled = false;
 
-    const defaultNs = ns.includes('brand') ? 'brand' : (ns.length === 1 ? ns[0] : null);
+    const defaultNs = ns.includes('brand') ? 'brand' : (ns.includes('default') ? 'default' : (ns.length > 0 ? ns[0] : null));
     if (defaultNs) {
       el.manageNamespace.value = defaultNs;
       data.namespace = defaultNs;
-      if (data.resourceType === 'recyclebin') {
-        loadRecycleBin();
-      } else if (data.resourceType !== 'overview') {
-        startManageLiveUpdates(data.resourceType, data.namespace);
-        startManageMetricsPolling();
-      }
+    } else {
+      data.namespace = el.manageNamespace.value || null;
+    }
+
+    if (data.resourceType === 'recyclebin') {
+      loadRecycleBin();
+    } else if (data.resourceType !== 'overview' && data.namespace) {
+      startManageLiveUpdates(data.resourceType, data.namespace);
+      startManageMetricsPolling();
     }
   } catch (e) {
     alert(`Failed to load namespaces: ${e.message}`);
@@ -1845,6 +1870,7 @@ function loadManageSettings() {
     if (typeof saved.enableEventCapture === 'boolean') state.manage.enableEventCapture = saved.enableEventCapture;
     if (typeof saved.eventRetention === 'number') state.manage.eventRetention = saved.eventRetention;
     if (typeof saved.auditEnabled === 'boolean') state.manage.auditEnabled = saved.auditEnabled;
+    if (typeof saved.aiProvider === 'string') state.manage.aiProvider = saved.aiProvider;
   } catch { /* corrupted localStorage — use defaults */ }
 }
 
@@ -1857,6 +1883,7 @@ function saveManageSettings() {
       enableEventCapture: state.manage.enableEventCapture,
       eventRetention: state.manage.eventRetention,
       auditEnabled: state.manage.auditEnabled,
+      aiProvider: state.manage.aiProvider,
     }));
   } catch { /* quota exceeded — silently ignore */ }
 }
@@ -1895,6 +1922,7 @@ function syncSettingsPopoverToState() {
   el.manageSettingAutoRefresh.checked = state.manage.enableAutoRefresh;
   el.manageSettingEventCapture.checked = state.manage.enableEventCapture;
   el.manageSettingEventRetention.value = state.manage.eventRetention;
+  if (el.manageSettingAiProvider) el.manageSettingAiProvider.value = state.manage.aiProvider || 'claude';
 
   // Menu item checkboxes
   const vis = state.manage.menuVisibility;
@@ -2106,6 +2134,62 @@ el.manageSettingEventClear.addEventListener('click', async () => {
     }
   }
 });
+
+if (el.manageSettingAiProvider) {
+  el.manageSettingAiProvider.addEventListener('change', () => {
+    state.manage.aiProvider = el.manageSettingAiProvider.value || 'claude';
+    saveManageSettings();
+  });
+}
+
+if (el.manageSettingAiTestBtn) {
+  el.manageSettingAiTestBtn.addEventListener('click', async () => {
+    const provider = state.manage.aiProvider || 'claude';
+    if (el.manageSettingAiTestBtn) el.manageSettingAiTestBtn.disabled = true;
+    if (el.manageSettingAiTestStatus) el.manageSettingAiTestStatus.textContent = 'Testing CLI execution...';
+    if (el.manageSettingAiTestResult) el.manageSettingAiTestResult.style.display = 'none';
+
+    try {
+      const res = await window.k8sApi.testAiCli(provider);
+      if (el.manageSettingAiTestBtn) el.manageSettingAiTestBtn.disabled = false;
+      if (el.manageSettingAiTestStatus) el.manageSettingAiTestStatus.textContent = '';
+      if (!el.manageSettingAiTestResult) return;
+
+      el.manageSettingAiTestResult.style.display = 'block';
+
+      if (res.ok) {
+        el.manageSettingAiTestResult.innerHTML = `
+          <div style="background: #161b22; border: 1px solid #238636; border-radius: 6px; padding: 12px; color: #3fb950; font-size: 0.85rem;">
+            <strong>✅ CLI connection successful! (${escHtml(res.command || provider)})</strong>
+            <div style="margin-top: 6px; color: #c9d1d9; font-style: italic;">"${escHtml(res.text)}"</div>
+          </div>
+        `;
+      } else {
+        const guide = res.installGuide || {};
+        const stepsHtml = (guide.steps || []).map((s) => `<li style="margin-bottom: 4px;">${escHtml(s)}</li>`).join('');
+        
+        el.manageSettingAiTestResult.innerHTML = `
+          <div style="background: #161b22; border: 1px solid #f85149; border-radius: 6px; padding: 12px; color: #c9d1d9; font-size: 0.85rem;">
+            <div style="color: #f85149; font-weight: bold; margin-bottom: 8px;">❌ ${escHtml(res.error || 'CLI not functional')}</div>
+            <div style="font-weight: 600; margin-bottom: 4px; color: #58a6ff;">Installation & Setup Instructions for ${escHtml(guide.name || provider)}:</div>
+            <ul style="margin: 0; padding-left: 18px; color: #8b949e;">${stepsHtml}</ul>
+            ${guide.installCmd ? `
+              <div style="margin-top: 10px; font-weight: 600; color: #8b949e;">Quick Install Command:</div>
+              <pre style="background: #0d1117; padding: 6px 10px; border-radius: 4px; color: #79c0ff; border: 1px solid #30363d; margin-top: 4px; user-select: all; font-size: 0.8rem;">${escHtml(guide.installCmd)}</pre>
+            ` : ''}
+          </div>
+        `;
+      }
+    } catch (err) {
+      if (el.manageSettingAiTestBtn) el.manageSettingAiTestBtn.disabled = false;
+      if (el.manageSettingAiTestStatus) el.manageSettingAiTestStatus.textContent = '';
+      if (el.manageSettingAiTestResult) {
+        el.manageSettingAiTestResult.style.display = 'block';
+        el.manageSettingAiTestResult.innerHTML = `<div style="color: #f85149; padding: 8px;">Test failed: ${escHtml(err.message)}</div>`;
+      }
+    }
+  });
+}
 
 // Apply visibility on startup
 applyMenuVisibility();
@@ -2518,6 +2602,15 @@ const MANAGE_COLUMN_DEFS = {
   ],
 };
 
+function hideAllSpecialPanes() {
+  if (el.manageOverviewPane) el.manageOverviewPane.style.display = 'none';
+  if (el.manageClusterlogsPane) el.manageClusterlogsPane.style.display = 'none';
+  if (el.manageRecyclebinPane) el.manageRecyclebinPane.style.display = 'none';
+  if (el.manageSettingsPane) el.manageSettingsPane.style.display = 'none';
+  if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
+  if (el.manageAianalyzeGlobalPane) el.manageAianalyzeGlobalPane.style.display = 'none';
+}
+
 // Returns the effective columns for a kind, injecting a Namespace column right after Name when
 // browsing all-namespaces (cluster-scoped kinds skip it — their `namespace` field is always empty).
 function getManageColumns(kind) {
@@ -2630,7 +2723,7 @@ function updateManageKindTitle() {
 // the resource-listing endpoints, have no table, and are exempt from the per-kind menu-visibility
 // toggle (always shown).
 function isManageSpecialView(resourceType) {
-  return resourceType === 'overview' || resourceType === 'recyclebin' || resourceType === 'clusterlogs' || resourceType === 'settings' || resourceType === 'portforwards';
+  return resourceType === 'overview' || resourceType === 'recyclebin' || resourceType === 'clusterlogs' || resourceType === 'settings' || resourceType === 'portforwards' || resourceType === 'aianalyze';
 }
 
 function startManageClusterLogs() {
@@ -2683,10 +2776,7 @@ function selectManageKind(kind) {
     stopManageWatch();
     stopManageMetricsPolling();
     stopManageClusterLogs();
-    el.manageOverviewPane.style.display = 'none';
-    el.manageClusterlogsPane.style.display = 'none';
-    el.manageRecyclebinPane.style.display = 'none';
-    if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
+    hideAllSpecialPanes();
     el.manageTableWrap.style.display = 'none';
     el.manageSettingsPane.style.display = 'block';
     updateManageKindTitle();
@@ -2708,11 +2798,8 @@ function selectManageKind(kind) {
     stopManagePolling();
     stopManageWatch();
     stopManageMetricsPolling();
-    el.manageOverviewPane.style.display = 'none';
-    el.manageRecyclebinPane.style.display = 'none';
-    if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
+    hideAllSpecialPanes();
     el.manageTableWrap.style.display = 'none';
-    el.manageSettingsPane.style.display = 'none';
     el.manageClusterlogsPane.style.display = 'flex';
     updateManageKindTitle();
     startManageClusterLogs();
@@ -2734,14 +2821,34 @@ function selectManageKind(kind) {
     stopManageWatch();
     stopManageMetricsPolling();
     stopManageClusterLogs();
-    el.manageOverviewPane.style.display = 'none';
-    el.manageClusterlogsPane.style.display = 'none';
-    el.manageRecyclebinPane.style.display = 'none';
-    el.manageSettingsPane.style.display = 'none';
+    hideAllSpecialPanes();
     el.manageTableWrap.style.display = 'none';
     if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'flex';
     updateManageKindTitle();
     loadManagePortForwardsPage();
+    return;
+  }
+
+  if (kind === 'aianalyze') {
+    if (data.mode === 'kind' && data.resourceType === 'aianalyze') return;
+    data.mode = 'kind';
+    data.activeCrd = null;
+    data.resourceType = 'aianalyze';
+    data.rows = [];
+    clearManageSelection();
+    el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === 'aianalyze'));
+    el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
+    closeManageDrawer();
+    stopManageOverviewPolling();
+    stopManagePolling();
+    stopManageWatch();
+    stopManageMetricsPolling();
+    stopManageClusterLogs();
+    hideAllSpecialPanes();
+    el.manageTableWrap.style.display = 'none';
+    if (el.manageAianalyzeGlobalPane) el.manageAianalyzeGlobalPane.style.display = 'flex';
+    updateManageKindTitle();
+    loadGlobalAiAnalysisHistory();
     return;
   }
 
@@ -2760,10 +2867,7 @@ function selectManageKind(kind) {
     stopManageWatch();
     stopManageMetricsPolling();
     stopManageClusterLogs();
-    el.manageOverviewPane.style.display = 'none';
-    el.manageClusterlogsPane.style.display = 'none';
-    if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
-    el.manageSettingsPane.style.display = 'none';
+    hideAllSpecialPanes();
     el.manageTableWrap.style.display = 'none';
     el.manageRecyclebinPane.style.display = 'flex';
     el.manageRecyclebinYaml.style.display = 'none';
@@ -2787,18 +2891,14 @@ function selectManageKind(kind) {
     stopManageWatch();
     stopManageMetricsPolling();
     stopManageClusterLogs();
+    hideAllSpecialPanes();
     el.manageTableWrap.style.display = 'none';
-    el.manageRecyclebinPane.style.display = 'none';
-    if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
-    el.manageClusterlogsPane.style.display = 'none';
-    el.manageSettingsPane.style.display = 'none';
     el.manageOverviewPane.style.display = 'flex';
     updateManageKindTitle();
     startManageOverviewPolling();
     return;
   }
 
-  if (kind === data.resourceType && data.mode === 'kind') return;
   data.mode = 'kind';
   data.activeCrd = null;
   data.resourceType = kind;
@@ -2806,11 +2906,7 @@ function selectManageKind(kind) {
   el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.toggle('active', b.dataset.kind === kind));
   el.manageCrdList.querySelectorAll('.manage-crd-item').forEach((b) => b.classList.remove('active'));
   stopManageClusterLogs();
-  el.manageOverviewPane.style.display = 'none';
-  el.manageRecyclebinPane.style.display = 'none';
-  if (el.managePortforwardsPane) el.managePortforwardsPane.style.display = 'none';
-  el.manageClusterlogsPane.style.display = 'none';
-  el.manageSettingsPane.style.display = 'none';
+  hideAllSpecialPanes();
   el.manageTableWrap.style.display = '';
   updateManageKindTitle();
   closeManageDrawer();
@@ -2831,9 +2927,14 @@ function selectManageKind(kind) {
   // Cached data above is rendered immediately — only the HTTP request is delayed.
   clearTimeout(selectManageKind._debounce);
   selectManageKind._debounce = setTimeout(() => {
-    if (data.context && data.namespace) {
-      startManageLiveUpdates(kind, data.namespace);
-      startManageMetricsPolling();
+    if (data.context) {
+      if (!data.namespace && el.manageNamespace.value) {
+        data.namespace = el.manageNamespace.value;
+      }
+      if (data.namespace) {
+        startManageLiveUpdates(kind, data.namespace);
+        startManageMetricsPolling();
+      }
     }
   }, 100);
 }
@@ -3189,7 +3290,9 @@ async function refreshManageResources() {
 
     if (!result.ok) {
       data.rows = [];
-      renderManageErrorRow(kindAtStart, result.error);
+      if (!handleAzureAuthError(result.error, showAuthModal)) {
+        renderManageErrorRow(kindAtStart, result.error);
+      }
       el.manageRefreshStatus.textContent = `Error at ${new Date().toLocaleTimeString()}`;
       return;
     }
@@ -3579,8 +3682,7 @@ function selectManageCrd(crd) {
   clearManageSelection();
   el.manageSidebar.querySelectorAll('.manage-nav-item').forEach((b) => b.classList.remove('active'));
   renderManageCrdList(el.manageCrdFilter.value); // re-render so the CRD's group is force-expanded and highlighted
-  el.manageOverviewPane.style.display = 'none';
-  el.manageRecyclebinPane.style.display = 'none';
+  hideAllSpecialPanes();
   el.manageTableWrap.style.display = '';
   updateManageKindTitle();
   closeManageDrawer();
@@ -3607,7 +3709,9 @@ async function refreshManageCustomResources() {
   if (data.activeCrd !== crdAtStart || data.namespace !== nsAtStart) return;
   if (!result.ok) {
     data.rows = [];
-    renderManageErrorRow(crd.name, result.error);
+    if (!handleAzureAuthError(result.error, showAuthModal)) {
+      renderManageErrorRow(crd.name, result.error);
+    }
     el.manageRefreshStatus.textContent = `Error at ${new Date().toLocaleTimeString()}`;
     return;
   }
@@ -3848,17 +3952,19 @@ function openManageDrawer(kind, row) {
   renderManageDetail(kind, row);
   renderManageDrawerActions(kind, row);
 
-  const isPod = kind === 'pods' && state.manage.mode === 'kind';
+  const isPod = (kind || '').toLowerCase() === 'pods' && state.manage.mode === 'kind';
   const isWorkloadWithLogs = state.manage.mode === 'kind' && ['pods', 'deployments', 'statefulsets', 'daemonsets'].includes(kind.toLowerCase());
   const isMetricsKind = state.manage.mode === 'kind' && MANAGE_METRICS_KINDS.includes(kind) && state.manage.enableMetrics;
   const logsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="logs"]');
   const execTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="exec"]');
   const pfTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="portforward"]');
   const metricsTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="metrics"]');
+  const analyzeTabBtn = el.manageDrawer.querySelector('.manage-tab[data-tab="analyze"]');
   logsTabBtn.style.display = isWorkloadWithLogs ? '' : 'none';
   execTabBtn.style.display = isPod ? '' : 'none';
   pfTabBtn.style.display = isPod ? '' : 'none';
   metricsTabBtn.style.display = isMetricsKind ? '' : 'none';
+  if (analyzeTabBtn) analyzeTabBtn.style.display = isPod ? '' : 'none';
   el.manageYamlRevealLabel.style.display = (state.manage.mode === 'kind' && kind === 'secrets') ? '' : 'none';
   if (isPod) {
     populateManageExecContainerPicker(row.containers || []);
@@ -4047,8 +4153,12 @@ function switchManageTab(tab) {
   el.manageExecPane.style.display = tab === 'exec' ? 'flex' : 'none';
   el.managePfPane.style.display = tab === 'portforward' ? 'flex' : 'none';
   el.manageMetricsPane.style.display = tab === 'metrics' ? 'flex' : 'none';
-  el.manageHistoryPane.style.display = tab === 'history' ? 'flex' : 'none';
+  if (el.manageHistoryPane) el.manageHistoryPane.style.display = tab === 'history' ? 'flex' : 'none';
+  if (el.manageAnalyzePane) el.manageAnalyzePane.style.display = tab === 'analyze' ? 'flex' : 'none';
   if (tab === 'yaml') loadManageYaml();
+  if (tab === 'analyze' && el.manageAnalyzeContent && !el.manageAnalyzeContent.children.length) {
+    runPodAnalysis();
+  }
   if (tab === 'events' && el.manageEventsPane) loadManageEvents();
   if (tab === 'access') loadManageAccess();
   if (tab === 'logs') {
@@ -4073,6 +4183,137 @@ function switchManageTab(tab) {
   if (tab === 'history') {
     loadManageHistory();
   }
+}
+
+async function runPodAnalysis() {
+  const row = state.manage.selected;
+  if (!row || !row.name) return;
+  if (!el.manageAnalyzeContent || !el.manageAnalyzeStatus) return;
+
+  el.manageAnalyzeStatus.textContent = 'Gathering telemetry & running diagnosis...';
+  if (el.manageAnalyzeRunBtn) el.manageAnalyzeRunBtn.disabled = true;
+  el.manageAnalyzeContent.innerHTML = '<div style="padding: 24px; text-align: center; color: #8b949e;"><span class="loading loading-spinner loading-md"></span><br/><br/>Collecting logs, events, and running AI diagnosis...</div>';
+
+  try {
+    const data = state.manage;
+    const ns = manageRowNamespace(row);
+    const res = await window.k8sApi.analyzePod(data.kubeconfig, data.context, ns, row.name, { cliProvider: state.manage.aiProvider || 'claude' });
+    if (el.manageAnalyzeRunBtn) el.manageAnalyzeRunBtn.disabled = false;
+
+    if (!res.ok) {
+      el.manageAnalyzeStatus.textContent = 'Analysis failed';
+      el.manageAnalyzeContent.innerHTML = `<div class="manage-error" style="color: #f85149; padding: 12px; background: #161b22; border-radius: 6px;">Error: ${escHtml(res.error)}</div>`;
+      return;
+    }
+
+    el.manageAnalyzeStatus.textContent = res.result.degraded ? 'Completed (rule fallback)' : 'Completed';
+    renderAnalysisResult(el.manageAnalyzeContent, res.result);
+    loadPodAnalysisHistory(row.name);
+  } catch (err) {
+    if (el.manageAnalyzeRunBtn) el.manageAnalyzeRunBtn.disabled = false;
+    el.manageAnalyzeStatus.textContent = 'Analysis error';
+    el.manageAnalyzeContent.innerHTML = `<div class="manage-error" style="color: #f85149; padding: 12px; background: #161b22; border-radius: 6px;">Failed: ${escHtml(err.message)}</div>`;
+    loadPodAnalysisHistory(row.name);
+  }
+}
+
+async function loadPodAnalysisHistory(podName) {
+  const data = state.manage;
+  if (!el.manageAnalyzeContent || !podName) return;
+  const ns = data.namespace || '__all__';
+  try {
+    const res = await window.k8sApi.getAnalysisHistory(data.kubeconfig, data.context, ns, podName);
+    if (res.ok && res.history && res.history.length > 0) {
+      const historyHeader = document.createElement('div');
+      historyHeader.style.cssText = 'margin-top: 20px; margin-bottom: 8px; font-weight: bold; color: #8b949e; font-size: 0.85rem;';
+      historyHeader.textContent = 'Past Analysis History for this Pod:';
+      el.manageAnalyzeContent.appendChild(historyHeader);
+
+      const historyContainer = document.createElement('div');
+      renderAnalysisHistoryTable(
+        historyContainer,
+        res.history,
+        async (id) => {
+          await window.k8sApi.deleteAnalysis(data.kubeconfig, data.context, id);
+          runPodAnalysis();
+        },
+        (record) => {
+          showAiAnalysisDetailModal(record);
+        }
+      );
+      el.manageAnalyzeContent.appendChild(historyContainer);
+    }
+  } catch {
+    /* ignore history load error */
+  }
+}
+
+async function loadGlobalAiAnalysisHistory() {
+  const data = state.manage;
+  if (!el.manageAianalyzeGlobalList) return;
+  el.manageAianalyzeGlobalList.innerHTML = '<div style="padding: 24px; text-align: center; color: #8b949e;"><span class="loading loading-spinner loading-md"></span><br/><br/>Loading AI Analysis History...</div>';
+
+  try {
+    const rawNs = data.namespace || '__all__';
+    const res = await window.k8sApi.getAnalysisHistory(data.kubeconfig, data.context, rawNs);
+    if (!res.ok) {
+      el.manageAianalyzeGlobalList.innerHTML = `<div class="manage-error" style="color: #f85149; padding: 12px;">Error: ${escHtml(res.error)}</div>`;
+      return;
+    }
+
+    renderAnalysisHistoryTable(
+      el.manageAianalyzeGlobalList,
+      res.history || [],
+      async (id) => {
+        await window.k8sApi.deleteAnalysis(data.kubeconfig, data.context, id);
+        loadGlobalAiAnalysisHistory();
+      },
+      (record) => {
+        showAiAnalysisDetailModal(record);
+      }
+    );
+  } catch (err) {
+    el.manageAianalyzeGlobalList.innerHTML = `<div class="manage-error" style="color: #f85149; padding: 12px;">Failed to load history: ${escHtml(err.message)}</div>`;
+  }
+}
+
+function showAiAnalysisDetailModal(record) {
+  const detailModal = document.createElement('div');
+  detailModal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 9999;';
+  const cardBox = document.createElement('div');
+  cardBox.style.cssText = 'width: 700px; max-width: 90vw; max-height: 85vh; background: #0f1117; padding: 16px; border-radius: 8px; border: 1px solid #30363d; overflow-y: auto;';
+  
+  const headerRow = document.createElement('div');
+  headerRow.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #21262d; padding-bottom: 8px;';
+  headerRow.innerHTML = `<h3 style="margin: 0; font-size: 1rem; color: #f0f6fc;">Pod: ${escHtml(record.podName)} (${escHtml(record.namespace)})</h3>`;
+  
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn btn-xs btn-ghost';
+  closeBtn.textContent = '✕ Close';
+  closeBtn.onclick = () => document.body.removeChild(detailModal);
+  headerRow.appendChild(closeBtn);
+  cardBox.appendChild(headerRow);
+
+  const cardContent = document.createElement('div');
+  renderAnalysisResult(cardContent, record.result);
+  cardBox.appendChild(cardContent);
+  detailModal.appendChild(cardBox);
+  document.body.appendChild(detailModal);
+}
+
+if (el.manageAnalyzeRunBtn) {
+  el.manageAnalyzeRunBtn.addEventListener('click', runPodAnalysis);
+}
+
+if (el.manageAianalyzeClearAllBtn) {
+  el.manageAianalyzeClearAllBtn.addEventListener('click', async () => {
+    if (confirm('Are you sure you want to delete all AI analysis history for this namespace/cluster?')) {
+      const data = state.manage;
+      const rawNs = data.namespace || '__all__';
+      await window.k8sApi.clearAnalysisHistory(data.kubeconfig, data.context, rawNs);
+      loadGlobalAiAnalysisHistory();
+    }
+  });
 }
 
 // Line-number gutter, shared by the read-only <pre> and the edit <textarea> so both views
@@ -4903,18 +5144,20 @@ async function loadManageHistory() {
   const row = data.selected;
   if (!row) {
     console.log('[audit-ui] loadManageHistory aborted: no row selected');
-    el.manageHistoryList.innerHTML = '<div class="manage-empty">Select a resource to view history</div>';
+    if (el.manageHistoryList) el.manageHistoryList.innerHTML = '<div class="manage-empty">Select a resource to view history</div>';
     return;
   }
   if (!data.auditConnected) {
     console.log('[audit-ui] loadManageHistory aborted: audit not connected');
-    el.manageHistoryList.innerHTML = '<div class="manage-empty">Enable Audit in Settings to view history</div>';
+    if (el.manageHistoryList) el.manageHistoryList.innerHTML = '<div class="manage-empty">Enable Audit in Settings to view history</div>';
     return;
   }
 
-  el.manageHistoryList.innerHTML = '<div class="manage-empty">Loading…</div>';
-  el.manageHistoryList.style.display = '';
-  el.manageHistoryDiff.style.display = 'none';
+  if (el.manageHistoryList) {
+    el.manageHistoryList.innerHTML = '<div class="manage-empty">Loading…</div>';
+    el.manageHistoryList.style.display = '';
+  }
+  if (el.manageHistoryDiff) el.manageHistoryDiff.style.display = 'none';
 
   const kind = data.mode === 'crd' ? (data.activeCrd?.kind || data.activeCrd?.name || '') : data.resourceType;
   const namespace = manageRowNamespace(row);

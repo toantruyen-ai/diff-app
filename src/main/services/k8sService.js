@@ -1,5 +1,5 @@
 const k8s = require('@kubernetes/client-node');
-const { buildKubeConfig, getCachedApiClients } = require('../utils/k8sHelper');
+const { buildKubeConfig, getCachedApiClients, extractK8sErrorMessage } = require('../utils/k8sHelper');
 const { withTimeout } = require('../utils/timeout');
 const { ageOf, projectRow, redactSecretData } = require('../utils/resourceFormatter');
 const {
@@ -192,7 +192,7 @@ async function listResource(ref, contextName, namespace, kind) {
     const rows = items.map((item) => projectRow(kind, item));
     return { ok: true, rows };
   } catch (e) {
-    return { ok: false, error: e.message };
+    return { ok: false, error: extractK8sErrorMessage(e) };
   }
 }
 

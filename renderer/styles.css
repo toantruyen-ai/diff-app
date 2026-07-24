@@ -210,13 +210,22 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px; height: 20px;
+  min-width: 20px;
+  height: 20px;
+  padding: 2px 8px;
   border-radius: 4px;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
-.badge-left  { background: var(--badge-a); color: #fff; }
-.badge-right { background: var(--badge-b); color: #fff; }
+.badge-left  { background: var(--badge-a); color: #fff; width: 20px; padding: 0; }
+.badge-right { background: var(--badge-b); color: #fff; width: 20px; padding: 0; }
+.badge-error { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+.badge-warning { background: rgba(234, 179, 8, 0.2); color: #fde047; border: 1px solid rgba(234, 179, 8, 0.3); }
+.badge-success { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+.badge-ghost { background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.2); }
+.badge-outline { background: transparent; color: #8b949e; border: 1px solid #30363d; }
 
 /* ── Selector panels ─────────────────────────────────────────────────────── */
 .selectors-row {
@@ -2769,6 +2778,29 @@ tr.sdr-row-partial:hover { background: color-mix(in srgb, #dc2626 10%, transpare
 .manage-settings-subtitle {
   font-size: 13px;
   color: var(--text-dim);
+  margin: 0;
+}
+.manage-settings-section {
+  margin-top: 24px;
+}
+.manage-settings-section-header {
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  max-width: 1100px;
+}
+.manage-settings-section-header h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.manage-settings-section-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
   margin: 0;
 }
 .manage-settings-grid {

@@ -81,10 +81,44 @@ function clearApiClientCache() {
   _apiClientCache.clear();
 }
 
+function extractK8sErrorMessage(e) {
+  if (!e) return 'Unknown error';
+
+  const body = e.body || e.response?.body;
+  if (body) {
+    if (typeof body === 'object' && body.message) {
+      return body.message;
+    }
+    if (typeof body === 'string') {
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed && parsed.message) return parsed.message;
+      } catch (_) {
+        if (body.trim()) return body;
+      }
+    }
+  }
+
+  if (e.message && e.message !== 'HTTP request failed') {
+    return e.message;
+  }
+
+  const status = e.statusCode || e.response?.statusCode;
+  const statusText = e.response?.statusMessage;
+  if (status && statusText) {
+    return `HTTP ${status} ${statusText}`;
+  } else if (status) {
+    return `HTTP ${status}`;
+  }
+
+  return e.message || String(e);
+}
+
 module.exports = {
   isKubeconfigContent,
   buildKubeConfig,
   makeManageApiClients,
   getCachedApiClients,
   clearApiClientCache,
+  extractK8sErrorMessage,
 };

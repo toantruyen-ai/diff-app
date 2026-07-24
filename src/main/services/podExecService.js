@@ -24,6 +24,7 @@ async function execStart(ref, contextName, namespace, pod, container, sid, getMa
   );
 
   const stdin = new PassThrough();
+  stdin.on('error', () => {});
   const stdout = new Writable({
     write(chunk, _enc, callback) {
       try {
@@ -125,8 +126,12 @@ async function execStart(ref, contextName, namespace, pod, container, sid, getMa
 
 function execWrite(sid, data) {
   const session = sessionManager.getSession(sid);
-  if (session && session.stdin) {
-    session.stdin.write(data);
+  if (session && session.stdin && !session.stdin.destroyed) {
+    try {
+      session.stdin.write(data);
+    } catch {
+      // ignore stream write errors on destroyed/closed stdin
+    }
   }
 }
 

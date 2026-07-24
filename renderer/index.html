@@ -495,6 +495,7 @@
         <button class="manage-nav-item" data-kind="events">⚡ Events</button>
         <button class="manage-nav-item" data-kind="clusterlogs">📜 Cluster Logs</button>
         <button class="manage-nav-item" data-kind="portforwards">🔌 Port Forwards</button>
+        <button class="manage-nav-item" data-kind="aianalyze">🤖 AI Analyze</button>
         <button class="manage-nav-item" data-kind="recyclebin">♻️ Recycle Bin</button>
         <button id="manage-settings-btn" class="manage-nav-item" data-kind="settings" title="Settings">⚙️ Settings</button>
         <div class="manage-nav-divider">RBAC</div>
@@ -594,89 +595,144 @@
           <div id="manage-portforwards-global-list" class="manage-portforwards-list"></div>
         </div>
 
+        <div id="manage-aianalyze-global-pane" class="manage-aianalyze-pane" style="display:none; padding: 16px; height: 100%; flex-direction: column;">
+          <div class="manage-portforwards-header" style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <h3 style="margin: 0; font-size: 1.1rem; color: #f0f6fc;">🤖 AI Troubleshooting History</h3>
+              <p class="manage-portforwards-sub" style="margin: 4px 0 0 0; color: #8b949e; font-size: 0.85rem;">Persisted AI analysis reports across all Pods (including deleted Pods).</p>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button id="manage-aianalyze-clear-all-btn" class="btn btn-xs btn-outline btn-error">Clear All History</button>
+            </div>
+          </div>
+          <div id="manage-aianalyze-global-list" class="manage-aianalyze-list" style="flex: 1; overflow-y: auto;"></div>
+        </div>
+
         <div id="manage-settings-pane" class="manage-settings-pane" style="display:none">
           <div class="manage-settings-header">
             <h2>⚙️ Application Settings</h2>
-            <p class="manage-settings-subtitle">Configure application preferences, performance settings, database integrations, and sidebar menu visibility.</p>
+            <p class="manage-settings-subtitle">Configure application preferences, performance settings, AI troubleshooting engines, and sidebar menu visibility.</p>
           </div>
 
-          <div class="manage-settings-grid">
-            <!-- Performance & Polling Card -->
-            <div class="manage-settings-card">
-              <div class="manage-settings-card-header">
-                <h3>⚡ Performance &amp; Metrics</h3>
-              </div>
-              <div class="manage-settings-card-body">
-                <label class="manage-settings-toggle">
-                  <input type="checkbox" id="manage-setting-metrics" />
-                  <div>
-                    <span class="manage-settings-label-title">Metrics (CPU / Memory)</span>
-                    <span class="manage-settings-label-sub">Fetch CPU and Memory metrics for Pods and Nodes</span>
-                  </div>
-                </label>
-                <label class="manage-settings-toggle">
-                  <input type="checkbox" id="manage-setting-autorefresh" />
-                  <div>
-                    <span class="manage-settings-label-title">Auto-Poll Resources</span>
-                    <span class="manage-settings-label-sub">Automatically refresh resource lists every few seconds</span>
-                  </div>
-                </label>
-              </div>
+          <!-- Section 1: General & Cluster Preferences -->
+          <div class="manage-settings-section">
+            <div class="manage-settings-section-header">
+              <h3>⚡ General &amp; Cluster Preferences</h3>
+              <p class="manage-settings-section-subtitle">Performance monitoring, local cluster event database, and audit log credentials.</p>
             </div>
-
-            <!-- Events Database Card -->
-            <div class="manage-settings-card">
-              <div class="manage-settings-card-header">
-                <h3>📜 Local Events Database</h3>
-              </div>
-              <div class="manage-settings-card-body">
-                <label class="manage-settings-toggle">
-                  <input type="checkbox" id="manage-setting-event-capture" />
-                  <div>
-                    <span class="manage-settings-label-title">Auto-Capture Events</span>
-                    <span class="manage-settings-label-sub">Watch cluster events automatically and persist to local SQLite DB</span>
-                  </div>
-                </label>
-                <div class="manage-settings-field-row">
-                  <label for="manage-setting-event-retention">Retention Period:</label>
-                  <select id="manage-setting-event-retention" class="manage-settings-select">
-                    <option value="0">Keep forever</option>
-                    <option value="1">1 Day</option>
-                    <option value="3">3 Days</option>
-                    <option value="7">7 Days</option>
-                    <option value="30">30 Days</option>
-                  </select>
+            <div class="manage-settings-grid">
+              <!-- Performance & Polling Card -->
+              <div class="manage-settings-card">
+                <div class="manage-settings-card-header">
+                  <h3>⚡ Performance &amp; Metrics</h3>
                 </div>
-                <div style="margin-top: 8px;">
-                  <button id="manage-setting-event-clear" class="btn btn-xs btn-danger">Clear Database Now</button>
+                <div class="manage-settings-card-body">
+                  <label class="manage-settings-toggle">
+                    <input type="checkbox" id="manage-setting-metrics" />
+                    <div>
+                      <span class="manage-settings-label-title">Metrics (CPU / Memory)</span>
+                      <span class="manage-settings-label-sub">Fetch CPU and Memory metrics for Pods and Nodes</span>
+                    </div>
+                  </label>
+                  <label class="manage-settings-toggle">
+                    <input type="checkbox" id="manage-setting-autorefresh" />
+                    <div>
+                      <span class="manage-settings-label-title">Auto-Poll Resources</span>
+                      <span class="manage-settings-label-sub">Automatically refresh resource lists every few seconds</span>
+                    </div>
+                  </label>
                 </div>
               </div>
-            </div>
 
-            <!-- Audit Database Card -->
-            <div class="manage-settings-card">
-              <div class="manage-settings-card-header">
-                <h3>🔒 Audit Database &amp; Write Access</h3>
-              </div>
-              <div class="manage-settings-card-body">
-                <label class="manage-settings-toggle">
-                  <input type="checkbox" id="manage-setting-audit" />
-                  <div>
-                    <span class="manage-settings-label-title">Enable Audit Logging (Azure SQL)</span>
-                    <span class="manage-settings-label-sub">Required to unlock write actions (edit YAML, delete, scale, restart)</span>
+              <!-- Events Database Card -->
+              <div class="manage-settings-card">
+                <div class="manage-settings-card-header">
+                  <h3>📜 Local Events Database</h3>
+                </div>
+                <div class="manage-settings-card-body">
+                  <label class="manage-settings-toggle">
+                    <input type="checkbox" id="manage-setting-event-capture" />
+                    <div>
+                      <span class="manage-settings-label-title">Auto-Capture Events</span>
+                      <span class="manage-settings-label-sub">Watch cluster events automatically and persist to local SQLite DB</span>
+                    </div>
+                  </label>
+                  <div class="manage-settings-field-row">
+                    <label for="manage-setting-event-retention">Retention Period:</label>
+                    <select id="manage-setting-event-retention" class="manage-settings-select">
+                      <option value="0">Keep forever</option>
+                      <option value="1">1 Day</option>
+                      <option value="3">3 Days</option>
+                      <option value="7">7 Days</option>
+                      <option value="30">30 Days</option>
+                    </select>
                   </div>
-                </label>
-                <div id="manage-audit-status" class="manage-audit-status" style="display:none"></div>
+                  <div style="margin-top: 8px;">
+                    <button id="manage-setting-event-clear" class="btn btn-xs btn-danger">Clear Database Now</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Audit Database Card -->
+              <div class="manage-settings-card">
+                <div class="manage-settings-card-header">
+                  <h3>🔒 Audit Database &amp; Write Access</h3>
+                </div>
+                <div class="manage-settings-card-body">
+                  <label class="manage-settings-toggle">
+                    <input type="checkbox" id="manage-setting-audit" />
+                    <div>
+                      <span class="manage-settings-label-title">Enable Audit Logging (Azure SQL)</span>
+                      <span class="manage-settings-label-sub">Required to unlock write actions (edit YAML, delete, scale, restart)</span>
+                    </div>
+                  </label>
+                  <div id="manage-audit-status" class="manage-audit-status" style="display:none"></div>
+                </div>
               </div>
             </div>
+          </div>
 
-            <!-- Sidebar Menu Visibility Card -->
-            <div class="manage-settings-card manage-settings-card-full">
-              <div class="manage-settings-card-header">
-                <h3>📌 Sidebar Menu Visibility</h3>
-                <span class="manage-settings-card-subtitle">Select which resource kinds to display in the left sidebar navigation menu.</span>
+          <!-- Section 2: AI Troubleshooting Configuration (Dedicated Section) -->
+          <div class="manage-settings-section manage-settings-section-ai" id="manage-settings-section-ai">
+            <div class="manage-settings-section-header">
+              <h3>🤖 AI Troubleshooting &amp; Diagnostics</h3>
+              <p class="manage-settings-section-subtitle">Configure AI model engine providers, CLI executables, and diagnostic options.</p>
+            </div>
+            <div class="manage-settings-grid">
+              <div class="manage-settings-card manage-settings-card-full">
+                <div class="manage-settings-card-header">
+                  <h3>AI Provider &amp; Engine Settings</h3>
+                </div>
+                <div class="manage-settings-card-body">
+                  <div class="manage-settings-field-row" style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
+                    <div>
+                      <span class="manage-settings-label-title">Primary AI CLI Provider</span>
+                      <span class="manage-settings-label-sub">Select the engine used to run automated root cause analysis on failing Pods</span>
+                    </div>
+                    <select id="manage-setting-ai-provider" class="manage-settings-select" style="background:#161b22; border:1px solid #30363d; color:#c9d1d9; padding:6px 12px; border-radius:6px; min-width:240px;">
+                      <option value="claude">Anthropic Claude CLI (`claude`)</option>
+                      <option value="antigravity">Google Antigravity CLI (`agy`)</option>
+                    </select>
+                  </div>
+                  <div style="margin-top: 12px; display: flex; align-items: center; gap: 8px;">
+                    <button id="manage-setting-ai-test-btn" class="btn btn-xs btn-primary">⚡ Test CLI Connection ("Hello")</button>
+                    <span id="manage-setting-ai-test-status" style="font-size: 0.82rem; color: #8b949e;"></span>
+                  </div>
+                  <div id="manage-setting-ai-test-result" style="margin-top: 12px; display: none;"></div>
+                </div>
               </div>
-              <div class="manage-settings-card-body manage-settings-visibility-grid">
+            </div>
+          </div>
+
+          <!-- Section 3: Sidebar Menu Visibility -->
+          <div class="manage-settings-section">
+            <div class="manage-settings-section-header">
+              <h3>📌 Sidebar Menu Visibility</h3>
+              <p class="manage-settings-section-subtitle">Select which resource kinds to display in the left sidebar navigation menu.</p>
+            </div>
+            <div class="manage-settings-grid">
+              <div class="manage-settings-card manage-settings-card-full">
+                <div class="manage-settings-card-body manage-settings-visibility-grid">
 
                 <div class="manage-settings-group-col">
                   <div class="manage-settings-section-title">
@@ -737,9 +793,9 @@
 
               </div>
             </div>
-
           </div>
         </div>
+      </div>
 
         <div id="manage-table-wrap" class="sdr-table-wrap">
           <table class="sdr-table">
@@ -766,6 +822,7 @@
           <button class="manage-tab" data-tab="portforward">Port-forward</button>
           <button class="manage-tab" data-tab="metrics">Metrics</button>
           <button class="manage-tab" data-tab="history">History</button>
+          <button class="manage-tab" data-tab="analyze" style="display:none">AI Analyze</button>
         </nav>
         <div id="manage-detail-pane" class="manage-detail-pane"></div>
         <div id="manage-yaml-pane" class="manage-yaml-pane" style="display:none">
@@ -829,6 +886,13 @@
             </div>
             <pre id="manage-history-diff-output" class="manage-history-diff-output"></pre>
           </div>
+        </div>
+        <div id="manage-analyze-pane" class="manage-analyze-pane" style="display:none; flex-direction:column; padding: 12px; height: 100%;">
+          <div class="manage-analyze-toolbar" style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center; justify-content: space-between;">
+            <button id="manage-analyze-run-btn" class="btn btn-xs btn-primary">⚡ Run AI Diagnosis</button>
+            <span id="manage-analyze-status" class="manage-analyze-status" style="font-size: 0.82rem; color: #8b949e;"></span>
+          </div>
+          <div id="manage-analyze-content" class="manage-analyze-content" style="flex: 1; overflow-y: auto;"></div>
         </div>
       </aside>
     </div>

@@ -171,6 +171,16 @@ function exposePreloadApi(customElectron) {
       ipcRenderer.invoke('debug:inject-ephemeral', ref, ctx, ns, pod, targetContainer, image),
     copyPodToDebug: (ref, ctx, ns, podName, containerToOverride, image, command) =>
       ipcRenderer.invoke('debug:copy-to', ref, ctx, ns, podName, containerToOverride, image, command),
+    analyzePod: (ref, ctx, ns, podName, opts) =>
+      ipcRenderer.invoke('analyze-pod', ref, ctx, ns, podName, opts),
+    getAnalysisHistory: (ref, ctx, ns, podName) =>
+      ipcRenderer.invoke('get-analysis-history', ref, ctx, ns, podName),
+    deleteAnalysis: (ref, ctx, id) =>
+      ipcRenderer.invoke('delete-analysis', ref, ctx, id),
+    clearAnalysisHistory: (ref, ctx, ns) =>
+      ipcRenderer.invoke('clear-analysis-history', ref, ctx, ns),
+    testAiCli: (provider) =>
+      ipcRenderer.invoke('test-ai-cli', provider),
     onSessionEvent: (cb) => {
       const handler = (_e, ev) => cb(ev);
       ipcRenderer.on('session:event', handler);

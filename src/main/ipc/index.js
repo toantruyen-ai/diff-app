@@ -8,6 +8,7 @@ const { registerMultiPodLogHandlers } = require('./multiPodLogHandler');
 const { registerAuditHandlers } = require('./auditHandler');
 const { registerYamlHandler } = require('./yamlHandler');
 const { registerDebugHandlers } = require('./debugHandler');
+const { registerTroubleshootingHandlers } = require('./troubleshootingHandler');
 
 function registerAllIpcHandlers(getMainWindow) {
   registerAppHandlers();
@@ -20,6 +21,7 @@ function registerAllIpcHandlers(getMainWindow) {
   registerAuditHandlers();
   registerYamlHandler();
   registerDebugHandlers(getMainWindow);
+  registerTroubleshootingHandlers();
 }
 
 module.exports = {
