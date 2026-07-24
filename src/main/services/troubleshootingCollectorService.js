@@ -92,6 +92,61 @@ async function collectPodContext(ref, contextName, namespace, podName, opts = {}
     }
   }
 
+  let grafanaTelemetry = null;
+  try {
+    const auditDb = require('../db/auditDb');
+    const res = await auditDb.getAiConfig(ref, contextName);
+    if (res && res.ok && res.config && res.config.grafanaUrl) {
+      const { grafanaUrl, serviceAccountToken, lokiDatasource, mimirDatasource } = res.config;
+      const headers = {};
+      if (serviceAccountToken) headers['Authorization'] = `Bearer ${serviceAccountToken}`;
+      const baseUrl = grafanaUrl.replace(/\/+$/, '');
+
+      grafanaTelemetry = { grafanaUrl, lokiLogs: [], mimirMetrics: [] };
+
+      // Helper with timeout
+      const fetchTimeout = async (url, ms = 3000) => {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), ms);
+        try {
+          const response = await fetch(url, { signal: controller.signal, headers });
+          clearTimeout(tid);
+          if (!response.ok) return null;
+          return await response.json();
+        } catch {
+          clearTimeout(tid);
+          return null;
+        }
+      };
+
+      if (lokiDatasource) {
+        const lokiUrl = `${baseUrl}/api/datasources/proxy/uid/${encodeURIComponent(lokiDatasource)}/loki/api/v1/query_range?query=${encodeURIComponent(`{namespace="${namespace}",pod="${podName}"}`)}&limit=30`;
+        const lokiData = await fetchTimeout(lokiUrl);
+        if (lokiData?.data?.result) {
+          grafanaTelemetry.lokiLogs = lokiData.data.result.map((s) => ({
+            stream: s.stream,
+            lines: (s.values || []).slice(-15).map((v) => v[1] || ''),
+          }));
+        }
+      }
+
+      if (mimirDatasource) {
+        const now = Math.floor(Date.now() / 1000);
+        const start = now - 1800;
+        const mimirUrl = `${baseUrl}/api/datasources/proxy/uid/${encodeURIComponent(mimirDatasource)}/api/v1/query_range?query=${encodeURIComponent(`container_memory_working_set_bytes{namespace="${namespace}",pod="${podName}"}`)}&start=${start}&end=${now}&step=120`;
+        const mimirData = await fetchTimeout(mimirUrl);
+        if (mimirData?.data?.result) {
+          grafanaTelemetry.mimirMetrics = mimirData.data.result.map((m) => ({
+            metric: m.metric,
+            samples: (m.values || []).slice(-10),
+          }));
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[troubleshooting] Grafana telemetry fetch error:', err.message);
+  }
+
   const rawContext = {
     namespace,
     podName,
@@ -102,6 +157,7 @@ async function collectPodContext(ref, contextName, namespace, podName, opts = {}
     limits: pod.spec?.containers?.[0]?.resources?.limits,
     requests: pod.spec?.containers?.[0]?.resources?.requests,
     missingRefs: [],
+    grafanaTelemetry,
   };
 
   return redactContext(rawContext);

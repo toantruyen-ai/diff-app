@@ -181,6 +181,10 @@ function exposePreloadApi(customElectron) {
       ipcRenderer.invoke('clear-analysis-history', ref, ctx, ns),
     testAiCli: (provider) =>
       ipcRenderer.invoke('test-ai-cli', provider),
+    getAiConfig: (ref, ctx) =>
+      ipcRenderer.invoke('get-ai-config', ref, ctx),
+    saveAiConfig: (ref, ctx, config) =>
+      ipcRenderer.invoke('save-ai-config', ref, ctx, config),
     onSessionEvent: (cb) => {
       const handler = (_e, ev) => cb(ev);
       ipcRenderer.on('session:event', handler);

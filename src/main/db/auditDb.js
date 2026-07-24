@@ -10,14 +10,7 @@ const crypto = require('crypto');
 
 let sql; // lazy-require mssql so the rest of the app still loads even if the package is missing
 
-/**
- * Shared cluster-id helper — identical hash used by events-db.js.
- * Extracted here so both modules agree on the id without a circular require.
- */
-function getClusterId(ref, contextName) {
-  const source = `${ref || 'default'}::${contextName || 'default'}`;
-  return crypto.createHash('md5').update(source).digest('hex');
-}
+const { getClusterId, resolveClusterId } = require('../utils/k8sHelper');
 
 // ── Module state ──────────────────────────────────────────────────────────────
 
@@ -134,6 +127,37 @@ async function ensureSchema() {
   await pool.request().query(`
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_resource')
     CREATE INDEX IX_audit_resource ON k8senvdiff_audit (cluster_id, namespace, kind, name, edit_version)
+  `);
+  await pool.request().query(`
+    IF OBJECT_ID('k8senvdiff_ai_analysis', 'U') IS NULL
+    CREATE TABLE k8senvdiff_ai_analysis (
+      id              NVARCHAR(64)   PRIMARY KEY,
+      cluster_id      NVARCHAR(64)   NOT NULL,
+      namespace       NVARCHAR(256)  NOT NULL DEFAULT '',
+      pod_name        NVARCHAR(256)  NOT NULL DEFAULT '',
+      root_cause      NVARCHAR(MAX),
+      confidence      NVARCHAR(32),
+      category        NVARCHAR(64),
+      degraded        BIT            NOT NULL DEFAULT 0,
+      result_json     NVARCHAR(MAX),
+      created_at      DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
+    )
+  `);
+  await pool.request().query(`
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ai_analysis_pod')
+    CREATE INDEX IX_ai_analysis_pod ON k8senvdiff_ai_analysis (cluster_id, namespace, pod_name, created_at DESC)
+  `);
+  await pool.request().query(`
+    IF OBJECT_ID('k8senvdiff_ai_config', 'U') IS NULL
+    CREATE TABLE k8senvdiff_ai_config (
+      cluster_id             NVARCHAR(64)   PRIMARY KEY,
+      grafana_url            NVARCHAR(512)  NOT NULL DEFAULT '',
+      service_account_token  NVARCHAR(MAX)  NOT NULL DEFAULT '',
+      loki_datasource        NVARCHAR(256)  NOT NULL DEFAULT '',
+      mimir_datasource       NVARCHAR(256)  NOT NULL DEFAULT '',
+      tempo_datasource       NVARCHAR(256)  NOT NULL DEFAULT '',
+      updated_at             DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
+    )
   `);
 }
 
@@ -273,6 +297,212 @@ async function close() {
   }
 }
 
+// ── AI Analysis CRUD (Audit Database) ─────────────────────────────────────────
+
+async function saveAnalysisRecord(ref, contextName, record) {
+  const id = record.id || crypto.randomUUID();
+  if (!pool) {
+    console.warn('[audit-db] saveAnalysisRecord skipped: Audit DB pool not connected');
+    return { id, ...record };
+  }
+  if (!sql) sql = require('mssql');
+
+  const clusterId = resolveClusterId(ref, contextName);
+  const resultJson = typeof record.result === 'object' ? JSON.stringify(record.result) : (record.resultJson || '{}');
+
+  const req = pool.request();
+  req.input('id', sql.NVarChar(64), id);
+  req.input('cluster_id', sql.NVarChar(64), clusterId);
+  req.input('namespace', sql.NVarChar(256), record.namespace || '');
+  req.input('pod_name', sql.NVarChar(256), record.podName || '');
+  req.input('root_cause', sql.NVarChar(sql.MAX), record.result?.rootCause || record.rootCause || '');
+  req.input('confidence', sql.NVarChar(32), record.result?.confidence || record.confidence || 'medium');
+  req.input('category', sql.NVarChar(64), record.result?.category || record.category || 'app');
+  req.input('degraded', sql.Bit, record.result?.degraded ? 1 : 0);
+  req.input('result_json', sql.NVarChar(sql.MAX), resultJson);
+
+  await req.query(`
+    INSERT INTO k8senvdiff_ai_analysis
+      (id, cluster_id, namespace, pod_name, root_cause, confidence, category, degraded, result_json, created_at)
+    VALUES
+      (@id, @cluster_id, @namespace, @pod_name, @root_cause, @confidence, @category, @degraded, @result_json, SYSUTCDATETIME())
+  `);
+  return { id, ...record };
+}
+
+async function getAnalysisHistory(ref, contextName, namespace, podName) {
+  if (!pool) return [];
+  if (!sql) sql = require('mssql');
+
+  const clusterId = resolveClusterId(ref, contextName);
+  const req = pool.request();
+  req.input('cluster_id', sql.NVarChar(64), clusterId);
+  req.input('namespace', sql.NVarChar(256), namespace || '');
+  req.input('pod_name', sql.NVarChar(256), podName || '');
+
+  let whereClause = 'WHERE 1=1';
+  if (clusterId) {
+    whereClause += ' AND cluster_id = @cluster_id';
+  }
+  if (namespace && namespace !== '__all__') {
+    whereClause += ' AND namespace = @namespace';
+  }
+  if (podName) {
+    whereClause += ' AND pod_name = @pod_name';
+  }
+
+  const result = await req.query(`
+    SELECT id, namespace, pod_name, root_cause, confidence, category, degraded, result_json, created_at
+    FROM k8senvdiff_ai_analysis
+    ${whereClause}
+    ORDER BY created_at DESC
+    OFFSET 0 ROWS FETCH NEXT 200 ROWS ONLY
+  `);
+
+  return (result.recordset || []).map((r) => {
+    let resultObj = null;
+    try {
+      resultObj = JSON.parse(r.result_json);
+    } catch {
+      resultObj = {};
+    }
+    return {
+      id: r.id,
+      namespace: r.namespace,
+      podName: r.pod_name,
+      timestamp: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+      rootCause: r.root_cause,
+      confidence: r.confidence,
+      category: r.category,
+      degraded: !!r.degraded,
+      result: resultObj,
+    };
+  });
+}
+
+async function deleteAnalysisById(arg1, arg2, arg3) {
+  const targetId = arg3 || arg1;
+  if (!pool || !targetId) return { changes: 0 };
+  if (!sql) sql = require('mssql');
+
+  const req = pool.request();
+  req.input('id', sql.NVarChar(64), targetId);
+  const result = await req.query(`
+    DELETE FROM k8senvdiff_ai_analysis WHERE id = @id
+  `);
+  return { changes: result.rowsAffected[0] || 0 };
+}
+
+async function clearAnalysisHistory(ref, contextName, namespace) {
+  if (!pool) return { changes: 0 };
+  if (!sql) sql = require('mssql');
+
+  const clusterId = resolveClusterId(ref, contextName);
+  const req = pool.request();
+  req.input('cluster_id', sql.NVarChar(64), clusterId);
+  req.input('namespace', sql.NVarChar(256), namespace || '');
+
+  let query = 'DELETE FROM k8senvdiff_ai_analysis WHERE 1=1';
+  if (clusterId) {
+    query += ' AND cluster_id = @cluster_id';
+  }
+  if (namespace && namespace !== '__all__') {
+    query += ' AND namespace = @namespace';
+  }
+
+  const result = await req.query(query);
+  return { changes: result.rowsAffected[0] || 0 };
+}
+
+async function saveAiConfig(ref, contextName, config = {}) {
+  if (!pool) {
+    console.warn('[audit-db] saveAiConfig skipped: Audit DB pool not connected');
+    return { ok: false, error: 'Audit DB pool not connected' };
+  }
+  if (!sql) sql = require('mssql');
+
+  const clusterId = resolveClusterId(ref, contextName);
+  if (!clusterId) {
+    return { ok: false, error: 'Invalid cluster reference' };
+  }
+
+  const req = pool.request();
+  req.input('cluster_id', sql.NVarChar(64), clusterId);
+  req.input('grafana_url', sql.NVarChar(512), config.grafanaUrl || '');
+  req.input('service_account_token', sql.NVarChar(sql.MAX), config.serviceAccountToken || '');
+  req.input('loki_datasource', sql.NVarChar(256), config.lokiDatasource || '');
+  req.input('mimir_datasource', sql.NVarChar(256), config.mimirDatasource || '');
+  req.input('tempo_datasource', sql.NVarChar(256), config.tempoDatasource || '');
+
+  await req.query(`
+    IF EXISTS (SELECT 1 FROM k8senvdiff_ai_config WHERE cluster_id = @cluster_id)
+    BEGIN
+      UPDATE k8senvdiff_ai_config
+      SET grafana_url = @grafana_url,
+          service_account_token = @service_account_token,
+          loki_datasource = @loki_datasource,
+          mimir_datasource = @mimir_datasource,
+          tempo_datasource = @tempo_datasource,
+          updated_at = SYSUTCDATETIME()
+      WHERE cluster_id = @cluster_id
+    END
+    ELSE
+    BEGIN
+      INSERT INTO k8senvdiff_ai_config
+        (cluster_id, grafana_url, service_account_token, loki_datasource, mimir_datasource, tempo_datasource, updated_at)
+      VALUES
+        (@cluster_id, @grafana_url, @service_account_token, @loki_datasource, @mimir_datasource, @tempo_datasource, SYSUTCDATETIME())
+    END
+  `);
+
+  return { ok: true, clusterId };
+}
+
+async function getAiConfig(ref, contextName) {
+  if (!pool) {
+    return { ok: true, config: { grafanaUrl: '', serviceAccountToken: '', lokiDatasource: '', mimirDatasource: '', tempoDatasource: '' } };
+  }
+  if (!sql) sql = require('mssql');
+
+  const clusterId = resolveClusterId(ref, contextName);
+  if (!clusterId) {
+    return { ok: true, config: { grafanaUrl: '', serviceAccountToken: '', lokiDatasource: '', mimirDatasource: '', tempoDatasource: '' } };
+  }
+
+  const req = pool.request();
+  req.input('cluster_id', sql.NVarChar(64), clusterId);
+
+  const res = await req.query(`
+    SELECT cluster_id, grafana_url, service_account_token, loki_datasource, mimir_datasource, tempo_datasource, updated_at
+    FROM k8senvdiff_ai_config
+    WHERE cluster_id = @cluster_id
+  `);
+
+  const row = res.recordset && res.recordset[0];
+  if (!row) {
+    return {
+      ok: true,
+      config: { grafanaUrl: '', serviceAccountToken: '', lokiDatasource: '', mimirDatasource: '', tempoDatasource: '' },
+    };
+  }
+
+  return {
+    ok: true,
+    config: {
+      grafanaUrl: row.grafana_url || '',
+      serviceAccountToken: row.service_account_token || '',
+      lokiDatasource: row.loki_datasource || '',
+      mimirDatasource: row.mimir_datasource || '',
+      tempoDatasource: row.tempo_datasource || '',
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+    },
+  };
+}
+
+function _setPoolForTesting(mockPool) {
+  pool = mockPool;
+}
+
 module.exports = {
   getClusterId,
   getAzureIdentity,
@@ -285,4 +515,11 @@ module.exports = {
   nextEditVersion,
   status,
   close,
+  saveAnalysisRecord,
+  getAnalysisHistory,
+  deleteAnalysisById,
+  clearAnalysisHistory,
+  saveAiConfig,
+  getAiConfig,
+  _setPoolForTesting,
 };

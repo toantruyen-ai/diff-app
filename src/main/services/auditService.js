@@ -1,18 +1,6 @@
 const k8s = require('@kubernetes/client-node');
 const auditDb = require('../db/auditDb');
-const { buildKubeConfig } = require('../utils/k8sHelper');
-const { redactSecretData, stripForRecreate } = require('../utils/resourceFormatter');
-const { RESTORABLE_KINDS } = require('../constants/k8sConstants');
-
-function resolveClusterId(ref, contextName) {
-  let identity = ref;
-  try {
-    const kc = buildKubeConfig(ref, contextName);
-    const cluster = kc.getCurrentCluster();
-    if (cluster && cluster.server) identity = cluster.server;
-  } catch { /* fallback to ref */ }
-  return auditDb.getClusterId(identity, contextName);
-}
+const { buildKubeConfig, resolveClusterId } = require('../utils/k8sHelper');
 
 async function recordAudit({ ref, contextName, namespace, kind, name, action, oldObj, newObj, editVersion }) {
   try {

@@ -32,6 +32,27 @@ function buildUserPrompt(ctx, findings = []) {
     )
     .join('\n');
 
+  let grafanaSummary = '';
+  if (ctx.grafanaTelemetry) {
+    const lokiStr = (ctx.grafanaTelemetry.lokiLogs || [])
+      .map((stream) => stream.lines.join('\n'))
+      .filter(Boolean)
+      .join('\n');
+    const mimirStr = (ctx.grafanaTelemetry.mimirMetrics || [])
+      .map((m) => `${m.metric.container || 'container'}: ${m.samples.map((s) => s[1]).join(', ')}`)
+      .join('\n');
+
+    grafanaSummary = `
+--- Grafana Observability Telemetry (Loki / Mimir) ---
+Grafana Instance: ${ctx.grafanaTelemetry.grafanaUrl}
+Loki Logs:
+${lokiStr || '(No Loki log streams found)'}
+
+Mimir / Prometheus Metrics:
+${mimirStr || '(No Mimir metric samples found)'}
+`.trim();
+  }
+
   return `
 Target Pod: ${ctx.podName} (Namespace: ${ctx.namespace})
 
@@ -49,7 +70,7 @@ ${prevLogTail || '(No previous log available)'}
 
 --- Current Container Log (Current Tail - Last 30 lines) ---
 ${currLogTail || '(No current log available)'}
-
+${grafanaSummary ? `\n${grafanaSummary}\n` : ''}
 Analyze the root cause, confidence, category, evidence, fix steps, commands, and potential risks based strictly on the above.
 Output must be a valid JSON object matching the AnalysisResult schema.
 `.trim();

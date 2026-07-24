@@ -74,6 +74,24 @@ function registerTroubleshootingHandlers(customElectron) {
       return { ok: false, error: e.message };
     }
   });
+
+  ipcMain.handle('get-ai-config', async (_event, ref, contextName) => {
+    try {
+      const auditDb = require('../db/auditDb');
+      return await auditDb.getAiConfig(ref, contextName);
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('save-ai-config', async (_event, ref, contextName, config) => {
+    try {
+      const auditDb = require('../db/auditDb');
+      return await auditDb.saveAiConfig(ref, contextName, config);
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
 }
 
 module.exports = {

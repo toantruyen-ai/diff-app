@@ -721,6 +721,42 @@
                   <div id="manage-setting-ai-test-result" style="margin-top: 12px; display: none;"></div>
                 </div>
               </div>
+
+              <!-- Observability Datasources Card (Stored in Audit DB per clusterId) -->
+              <div class="manage-settings-card manage-settings-card-full" style="margin-top: 16px;">
+                <div class="manage-settings-card-header">
+                  <h3>📊 Grafana &amp; Observability Datasources (Audit DB)</h3>
+                  <p class="manage-settings-section-subtitle" style="margin-top:2px;">Configure Grafana connection details &amp; datasources stored centrally per cluster.</p>
+                </div>
+                <div class="manage-settings-card-body">
+                  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px;">
+                    <div>
+                      <label class="manage-settings-label-title" style="font-size:0.8rem; display:block; margin-bottom:4px;">Grafana Base URL</label>
+                      <input type="text" id="manage-setting-ai-grafana-url" class="input input-sm input-bordered w-full" placeholder="https://grafana.example.com" style="background:#161b22; border:1px solid #30363d; color:#c9d1d9;" />
+                    </div>
+                    <div>
+                      <label class="manage-settings-label-title" style="font-size:0.8rem; display:block; margin-bottom:4px;">Service Account Bearer Token</label>
+                      <input type="password" id="manage-setting-ai-grafana-token" class="input input-sm input-bordered w-full" placeholder="glsa_..." style="background:#161b22; border:1px solid #30363d; color:#c9d1d9;" />
+                    </div>
+                    <div>
+                      <label class="manage-settings-label-title" style="font-size:0.8rem; display:block; margin-bottom:4px;">Loki Datasource Name / UID</label>
+                      <input type="text" id="manage-setting-ai-grafana-loki" class="input input-sm input-bordered w-full" placeholder="loki" style="background:#161b22; border:1px solid #30363d; color:#c9d1d9;" />
+                    </div>
+                    <div>
+                      <label class="manage-settings-label-title" style="font-size:0.8rem; display:block; margin-bottom:4px;">Mimir / Prometheus Datasource Name / UID</label>
+                      <input type="text" id="manage-setting-ai-grafana-mimir" class="input input-sm input-bordered w-full" placeholder="mimir" style="background:#161b22; border:1px solid #30363d; color:#c9d1d9;" />
+                    </div>
+                    <div>
+                      <label class="manage-settings-label-title" style="font-size:0.8rem; display:block; margin-bottom:4px;">Tempo Datasource Name / UID</label>
+                      <input type="text" id="manage-setting-ai-grafana-tempo" class="input input-sm input-bordered w-full" placeholder="tempo" style="background:#161b22; border:1px solid #30363d; color:#c9d1d9;" />
+                    </div>
+                  </div>
+                  <div style="margin-top: 14px; display: flex; align-items: center; gap: 12px;">
+                    <button id="manage-setting-ai-grafana-save-btn" class="btn btn-xs btn-primary">💾 Save Observability Config</button>
+                    <span id="manage-setting-ai-grafana-save-status" style="font-size: 0.82rem; color: #8b949e;"></span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 

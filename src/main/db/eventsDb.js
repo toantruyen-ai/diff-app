@@ -4,22 +4,16 @@ const crypto = require('crypto');
 const sqlite3 = require('sqlite3').verbose();
 const { app } = require('electron');
 
+const { resolveClusterId } = require('../utils/k8sHelper');
+
 let currentDb = null;
 let currentClusterId = null;
-
-/**
- * Sinh ID duy nhất cho cluster dựa trên kubeconfig và context.
- */
-function getClusterId(ref, contextName) {
-  const source = `${ref || 'default'}::${contextName || 'default'}`;
-  return crypto.createHash('md5').update(source).digest('hex');
-}
 
 /**
  * Switch sang database của cluster mới.
  */
 function switchCluster(ref, contextName) {
-  const clusterId = getClusterId(ref, contextName);
+  const clusterId = resolveClusterId(ref, contextName);
   
   if (currentClusterId === clusterId && currentDb) {
     return currentDb;

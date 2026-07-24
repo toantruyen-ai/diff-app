@@ -1,5 +1,33 @@
+const crypto = require('crypto');
 const k8s = require('@kubernetes/client-node');
 const { hasAksKc, touchAksKc } = require('../services/kubeconfigStoreService');
+
+/**
+ * Low-level MD5 cluster-id generator from identity string and context.
+ */
+function getClusterId(ref, contextName) {
+  const source = `${ref || 'default'}::${contextName || 'default'}`;
+  return crypto.createHash('md5').update(source).digest('hex');
+}
+
+/**
+ * Standardized global clusterId resolver across all features (Audit DB, Events DB, AI Troubleshooting DB, etc.).
+ * Resolves the immutable API Server URL (kc.getCurrentCluster().server) when available,
+ * ensuring 100% deterministic & persistent cluster identification across cluster switches,
+ * context reloads, and temporary kubeconfig file paths.
+ */
+function resolveClusterId(ref, contextName) {
+  if (!ref && !contextName) return '';
+  let identity = ref;
+  try {
+    const kc = buildKubeConfig(ref, contextName);
+    const cluster = kc.getCurrentCluster();
+    if (cluster && cluster.server) identity = cluster.server;
+  } catch {
+    /* fallback to raw ref string */
+  }
+  return getClusterId(identity, contextName);
+}
 
 function isKubeconfigContent(str) {
   if (typeof str !== 'string') return false;
@@ -115,6 +143,8 @@ function extractK8sErrorMessage(e) {
 }
 
 module.exports = {
+  getClusterId,
+  resolveClusterId,
   isKubeconfigContent,
   buildKubeConfig,
   makeManageApiClients,

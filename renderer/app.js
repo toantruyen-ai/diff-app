@@ -255,6 +255,13 @@ const el = {
   manageSettingAiTestBtn:    $('manage-setting-ai-test-btn'),
   manageSettingAiTestStatus: $('manage-setting-ai-test-status'),
   manageSettingAiTestResult: $('manage-setting-ai-test-result'),
+  manageSettingGrafanaUrl:   $('manage-setting-ai-grafana-url'),
+  manageSettingGrafanaToken: $('manage-setting-ai-grafana-token'),
+  manageSettingGrafanaLoki:  $('manage-setting-ai-grafana-loki'),
+  manageSettingGrafanaMimir: $('manage-setting-ai-grafana-mimir'),
+  manageSettingGrafanaTempo: $('manage-setting-ai-grafana-tempo'),
+  manageSettingGrafanaSaveBtn: $('manage-setting-ai-grafana-save-btn'),
+  manageSettingGrafanaSaveStatus: $('manage-setting-ai-grafana-save-status'),
   manageConfirmOverlay: $('manage-confirm-overlay'),
   manageConfirmTitle:   $('manage-confirm-title'),
   manageConfirmBody:    $('manage-confirm-body'),
@@ -1782,6 +1789,7 @@ async function loadManageNamespaces() {
 el.manageContext.addEventListener('change', async () => {
   const data = state.manage;
   data.context = el.manageContext.value || null;
+  loadAiObservabilityConfig();
   data.namespace = null;
   el.manageNamespace.innerHTML = '<option value="">— select namespace —</option>';
   el.manageNamespace.disabled = true;
@@ -1923,6 +1931,7 @@ function syncSettingsPopoverToState() {
   el.manageSettingEventCapture.checked = state.manage.enableEventCapture;
   el.manageSettingEventRetention.value = state.manage.eventRetention;
   if (el.manageSettingAiProvider) el.manageSettingAiProvider.value = state.manage.aiProvider || 'claude';
+  loadAiObservabilityConfig();
 
   // Menu item checkboxes
   const vis = state.manage.menuVisibility;
@@ -2189,6 +2198,70 @@ if (el.manageSettingAiTestBtn) {
       }
     }
   });
+}
+
+async function loadAiObservabilityConfig() {
+  const data = state.manage;
+  if (!window.k8sApi || !window.k8sApi.getAiConfig) return;
+  try {
+    const res = await window.k8sApi.getAiConfig(data.kubeconfig, data.context);
+    if (res && res.ok && res.config) {
+      if (el.manageSettingGrafanaUrl) el.manageSettingGrafanaUrl.value = res.config.grafanaUrl || '';
+      if (el.manageSettingGrafanaToken) el.manageSettingGrafanaToken.value = res.config.serviceAccountToken || '';
+      if (el.manageSettingGrafanaLoki) el.manageSettingGrafanaLoki.value = res.config.lokiDatasource || '';
+      if (el.manageSettingGrafanaMimir) el.manageSettingGrafanaMimir.value = res.config.mimirDatasource || '';
+      if (el.manageSettingGrafanaTempo) el.manageSettingGrafanaTempo.value = res.config.tempoDatasource || '';
+    }
+  } catch (err) {
+    console.error('Failed to load AI Observability config:', err);
+  }
+}
+
+async function saveAiObservabilityConfig() {
+  const data = state.manage;
+  if (!window.k8sApi || !window.k8sApi.saveAiConfig) return;
+  const config = {
+    grafanaUrl: el.manageSettingGrafanaUrl?.value.trim() || '',
+    serviceAccountToken: el.manageSettingGrafanaToken?.value.trim() || '',
+    lokiDatasource: el.manageSettingGrafanaLoki?.value.trim() || '',
+    mimirDatasource: el.manageSettingGrafanaMimir?.value.trim() || '',
+    tempoDatasource: el.manageSettingGrafanaTempo?.value.trim() || '',
+  };
+
+  if (el.manageSettingGrafanaSaveBtn) el.manageSettingGrafanaSaveBtn.disabled = true;
+  if (el.manageSettingGrafanaSaveStatus) {
+    el.manageSettingGrafanaSaveStatus.style.color = '#8b949e';
+    el.manageSettingGrafanaSaveStatus.textContent = 'Saving to Audit DB...';
+  }
+
+  try {
+    const res = await window.k8sApi.saveAiConfig(data.kubeconfig, data.context, config);
+    if (el.manageSettingGrafanaSaveBtn) el.manageSettingGrafanaSaveBtn.disabled = false;
+    if (res && res.ok) {
+      if (el.manageSettingGrafanaSaveStatus) {
+        el.manageSettingGrafanaSaveStatus.style.color = '#3fb950';
+        el.manageSettingGrafanaSaveStatus.textContent = '✓ Saved to Audit DB';
+        setTimeout(() => {
+          if (el.manageSettingGrafanaSaveStatus) el.manageSettingGrafanaSaveStatus.textContent = '';
+        }, 3000);
+      }
+    } else {
+      if (el.manageSettingGrafanaSaveStatus) {
+        el.manageSettingGrafanaSaveStatus.style.color = '#f85149';
+        el.manageSettingGrafanaSaveStatus.textContent = `Error: ${res.error || 'Failed'}`;
+      }
+    }
+  } catch (err) {
+    if (el.manageSettingGrafanaSaveBtn) el.manageSettingGrafanaSaveBtn.disabled = false;
+    if (el.manageSettingGrafanaSaveStatus) {
+      el.manageSettingGrafanaSaveStatus.style.color = '#f85149';
+      el.manageSettingGrafanaSaveStatus.textContent = `Error: ${err.message}`;
+    }
+  }
+}
+
+if (el.manageSettingGrafanaSaveBtn) {
+  el.manageSettingGrafanaSaveBtn.addEventListener('click', saveAiObservabilityConfig);
 }
 
 // Apply visibility on startup
@@ -3943,6 +4016,8 @@ function openManageDrawer(kind, row) {
   state.manage.revealSecrets = false;
   state.manage.yamlEditing = false;
   el.manageYamlReveal.checked = false;
+  if (el.manageAnalyzeContent) el.manageAnalyzeContent.innerHTML = '';
+  if (el.manageAnalyzeStatus) el.manageAnalyzeStatus.textContent = '';
   el.manageDrawer.classList.add('open');
   // In CRD mode, append the Kind+group so two same-named resources under different API groups
   // (e.g. Traefik's Middleware in both traefik.io and traefik.containo.us) aren't ambiguous here.
@@ -3980,6 +4055,8 @@ function closeManageDrawer() {
   state.manage.selected = null;
   state.manage.revealSecrets = false;
   state.manage.yamlEditing = false;
+  if (el.manageAnalyzeContent) el.manageAnalyzeContent.innerHTML = '';
+  if (el.manageAnalyzeStatus) el.manageAnalyzeStatus.textContent = '';
   el.manageDrawer.classList.remove('open');
 }
 
@@ -4157,7 +4234,7 @@ function switchManageTab(tab) {
   if (el.manageAnalyzePane) el.manageAnalyzePane.style.display = tab === 'analyze' ? 'flex' : 'none';
   if (tab === 'yaml') loadManageYaml();
   if (tab === 'analyze' && el.manageAnalyzeContent && !el.manageAnalyzeContent.children.length) {
-    runPodAnalysis();
+    initPodAnalysis();
   }
   if (tab === 'events' && el.manageEventsPane) loadManageEvents();
   if (tab === 'access') loadManageAccess();
@@ -4185,10 +4262,73 @@ function switchManageTab(tab) {
   }
 }
 
+async function initPodAnalysis() {
+  const row = state.manage.selected;
+  if (!row || !row.name) return;
+  if (!el.manageAnalyzeContent || !el.manageAnalyzeStatus) return;
+
+  const targetPodName = row.name;
+  const targetNs = manageRowNamespace(row);
+
+  el.manageAnalyzeStatus.textContent = 'Checking saved analysis history...';
+  el.manageAnalyzeContent.innerHTML = '<div style="padding: 24px; text-align: center; color: #8b949e;"><span class="loading loading-spinner loading-md"></span><br/><br/>Loading analysis history...</div>';
+
+  try {
+    const data = state.manage;
+    const res = await window.k8sApi.getAnalysisHistory(data.kubeconfig, data.context, targetNs, targetPodName);
+
+    if (!state.manage.selected || state.manage.selected.name !== targetPodName || manageRowNamespace(state.manage.selected) !== targetNs) {
+      return;
+    }
+
+    if (res.ok && res.history && res.history.length > 0) {
+      const latest = res.history[0];
+      const timeStr = latest.timestamp ? new Date(latest.timestamp).toLocaleString() : 'N/A';
+      el.manageAnalyzeStatus.textContent = `Loaded saved analysis (${timeStr})`;
+      el.manageAnalyzeContent.innerHTML = '';
+      renderAnalysisResult(el.manageAnalyzeContent, latest.result);
+
+      const historyHeader = document.createElement('div');
+      historyHeader.className = 'pod-analysis-history-header';
+      historyHeader.style.cssText = 'margin-top: 20px; margin-bottom: 8px; font-weight: bold; color: #8b949e; font-size: 0.85rem;';
+      historyHeader.textContent = 'Past Analysis History for this Pod:';
+      el.manageAnalyzeContent.appendChild(historyHeader);
+
+      const historyContainer = document.createElement('div');
+      historyContainer.className = 'pod-analysis-history-container';
+      renderAnalysisHistoryTable(
+        historyContainer,
+        res.history,
+        async (id) => {
+          await window.k8sApi.deleteAnalysis(data.kubeconfig, data.context, id);
+          if (state.manage.selected && state.manage.selected.name === targetPodName) {
+            initPodAnalysis();
+          }
+        },
+        (record) => {
+          showAiAnalysisDetailModal(record);
+        }
+      );
+      el.manageAnalyzeContent.appendChild(historyContainer);
+    } else {
+      // No saved analysis in DB for this pod -> auto-run live AI diagnosis
+      runPodAnalysis();
+    }
+  } catch {
+    if (!state.manage.selected || state.manage.selected.name !== targetPodName || manageRowNamespace(state.manage.selected) !== targetNs) {
+      return;
+    }
+    runPodAnalysis();
+  }
+}
+
 async function runPodAnalysis() {
   const row = state.manage.selected;
   if (!row || !row.name) return;
   if (!el.manageAnalyzeContent || !el.manageAnalyzeStatus) return;
+
+  const targetPodName = row.name;
+  const targetNs = manageRowNamespace(row);
 
   el.manageAnalyzeStatus.textContent = 'Gathering telemetry & running diagnosis...';
   if (el.manageAnalyzeRunBtn) el.manageAnalyzeRunBtn.disabled = true;
@@ -4196,8 +4336,13 @@ async function runPodAnalysis() {
 
   try {
     const data = state.manage;
-    const ns = manageRowNamespace(row);
-    const res = await window.k8sApi.analyzePod(data.kubeconfig, data.context, ns, row.name, { cliProvider: state.manage.aiProvider || 'claude' });
+    const res = await window.k8sApi.analyzePod(data.kubeconfig, data.context, targetNs, targetPodName, { cliProvider: state.manage.aiProvider || 'claude' });
+    
+    // Guard against stale response if user switched pods while request was in-flight
+    if (!state.manage.selected || state.manage.selected.name !== targetPodName || manageRowNamespace(state.manage.selected) !== targetNs) {
+      return;
+    }
+
     if (el.manageAnalyzeRunBtn) el.manageAnalyzeRunBtn.disabled = false;
 
     if (!res.ok) {
@@ -4208,34 +4353,49 @@ async function runPodAnalysis() {
 
     el.manageAnalyzeStatus.textContent = res.result.degraded ? 'Completed (rule fallback)' : 'Completed';
     renderAnalysisResult(el.manageAnalyzeContent, res.result);
-    loadPodAnalysisHistory(row.name);
+    loadPodAnalysisHistory(targetPodName, targetNs);
   } catch (err) {
+    if (!state.manage.selected || state.manage.selected.name !== targetPodName || manageRowNamespace(state.manage.selected) !== targetNs) {
+      return;
+    }
     if (el.manageAnalyzeRunBtn) el.manageAnalyzeRunBtn.disabled = false;
     el.manageAnalyzeStatus.textContent = 'Analysis error';
     el.manageAnalyzeContent.innerHTML = `<div class="manage-error" style="color: #f85149; padding: 12px; background: #161b22; border-radius: 6px;">Failed: ${escHtml(err.message)}</div>`;
-    loadPodAnalysisHistory(row.name);
+    loadPodAnalysisHistory(targetPodName, targetNs);
   }
 }
 
-async function loadPodAnalysisHistory(podName) {
+async function loadPodAnalysisHistory(podName, namespace) {
   const data = state.manage;
   if (!el.manageAnalyzeContent || !podName) return;
-  const ns = data.namespace || '__all__';
+  if (!state.manage.selected || state.manage.selected.name !== podName) return;
+
+  const ns = namespace || (state.manage.selected ? manageRowNamespace(state.manage.selected) : (data.namespace || '__all__'));
   try {
     const res = await window.k8sApi.getAnalysisHistory(data.kubeconfig, data.context, ns, podName);
+    if (!state.manage.selected || state.manage.selected.name !== podName) return;
     if (res.ok && res.history && res.history.length > 0) {
+      const oldHeader = el.manageAnalyzeContent.querySelector('.pod-analysis-history-header');
+      if (oldHeader) oldHeader.remove();
+      const oldContainer = el.manageAnalyzeContent.querySelector('.pod-analysis-history-container');
+      if (oldContainer) oldContainer.remove();
+
       const historyHeader = document.createElement('div');
+      historyHeader.className = 'pod-analysis-history-header';
       historyHeader.style.cssText = 'margin-top: 20px; margin-bottom: 8px; font-weight: bold; color: #8b949e; font-size: 0.85rem;';
       historyHeader.textContent = 'Past Analysis History for this Pod:';
       el.manageAnalyzeContent.appendChild(historyHeader);
 
       const historyContainer = document.createElement('div');
+      historyContainer.className = 'pod-analysis-history-container';
       renderAnalysisHistoryTable(
         historyContainer,
         res.history,
         async (id) => {
           await window.k8sApi.deleteAnalysis(data.kubeconfig, data.context, id);
-          runPodAnalysis();
+          if (state.manage.selected && state.manage.selected.name === podName) {
+            initPodAnalysis();
+          }
         },
         (record) => {
           showAiAnalysisDetailModal(record);
