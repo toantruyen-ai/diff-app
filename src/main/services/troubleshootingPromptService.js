@@ -15,13 +15,13 @@ function buildUserPrompt(ctx, findings = []) {
 
   const prevLogTail = (ctx.logsPrevious || '')
     .split('\n')
-    .slice(-60)
+    .slice(-70)
     .join('\n')
     .trim();
 
   const currLogTail = (ctx.logsCurrent || '')
     .split('\n')
-    .slice(-30)
+    .slice(-40)
     .join('\n')
     .trim();
 
@@ -62,14 +62,15 @@ ${containerSummary || 'No container data'}
 --- Rule Engine Pre-Analysis Findings ---
 ${findingsSummary || 'No automated rules matched'}
 
---- Recent Events (Last 15) ---
-${eventsSummary || 'No recent events recorded'}
+--- PRIMARY LOG SOURCE: Previous Container Crash Log (--previous) ---
+[PRIORITY]: If previous crash logs exist below, treat them as the primary evidence for container failure/crash.
+${prevLogTail || '(No previous crash log recorded - container has not restarted or has no previous log)'}
 
---- Previous Container Log (Crash Log Tail - Last 60 lines) ---
-${prevLogTail || '(No previous log available)'}
-
---- Current Container Log (Current Tail - Last 30 lines) ---
+--- Recent Container Log (Current Stream - Last 40 lines) ---
 ${currLogTail || '(No current log available)'}
+
+--- Recent Kubernetes Events (Last 15) ---
+${eventsSummary || 'No recent events recorded'}
 ${grafanaSummary ? `\n${grafanaSummary}\n` : ''}
 Analyze the root cause, confidence, category, evidence, fix steps, commands, and potential risks based strictly on the above.
 Output must be a valid JSON object matching the AnalysisResult schema.

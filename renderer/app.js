@@ -4094,6 +4094,128 @@ function getManageActionsFor(kind, row) {
   return actions;
 }
 
+async function showFetchedLogsModal(cmd, podName, namespace, containerName, isPrevious) {
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 99999; padding: 20px;';
+
+  const card = document.createElement('div');
+  card.style.cssText = 'width: 850px; max-width: 95vw; height: 80vh; background: #0f1117; border-radius: 8px; border: 1px solid #30363d; display: flex; flex-direction: column; overflow: hidden; font-family: sans-serif;';
+
+  const header = document.createElement('div');
+  header.style.cssText = 'padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d; display: flex; align-items: center; justify-content: space-between; gap: 8px;';
+  header.innerHTML = `
+    <div style="overflow: hidden;">
+      <div style="font-weight: bold; color: #f0f6fc; font-size: 0.95rem;">📜 Log Stream ${isPrevious ? '(--previous crash log)' : ''}</div>
+      <code style="font-size: 0.8rem; color: #58a6ff; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; display: block;">${escHtml(cmd)}</code>
+    </div>
+  `;
+
+  let sid = null;
+  const btnGroup = document.createElement('div');
+  btnGroup.style.cssText = 'display: flex; gap: 8px; align-items: center; flex-shrink: 0;';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'btn btn-xs btn-ghost';
+  copyBtn.textContent = '📋 Copy Logs';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn btn-xs btn-ghost';
+  closeBtn.textContent = '✕ Close';
+  closeBtn.onclick = () => {
+    if (sid && window.k8sApi.stopPodLogs) window.k8sApi.stopPodLogs(sid);
+    if (document.body.contains(modal)) document.body.removeChild(modal);
+  };
+
+  btnGroup.appendChild(copyBtn);
+  btnGroup.appendChild(closeBtn);
+  header.appendChild(btnGroup);
+  card.appendChild(header);
+
+  const logContent = document.createElement('pre');
+  logContent.style.cssText = 'flex: 1; margin: 0; padding: 12px 16px; background: #0d1117; color: #c9d1d9; font-family: monospace; font-size: 0.83rem; overflow: auto; white-space: pre-wrap; word-break: break-all;';
+  logContent.textContent = 'Connecting and fetching logs from Kubernetes cluster...';
+  card.appendChild(logContent);
+
+  modal.appendChild(card);
+  document.body.appendChild(modal);
+
+  let fullLogs = '';
+  copyBtn.onclick = () => {
+    if (navigator.clipboard && fullLogs) {
+      navigator.clipboard.writeText(fullLogs);
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = '📋 Copy Logs'; }, 2000);
+    }
+  };
+
+  sid = crypto.randomUUID();
+  const data = state.manage;
+
+  if (window.k8sApi.onPodLogData) {
+    window.k8sApi.onPodLogData(sid, (chunk) => {
+      if (logContent.textContent === 'Connecting and fetching logs from Kubernetes cluster...') {
+        logContent.textContent = '';
+      }
+      fullLogs += chunk;
+      logContent.textContent += chunk;
+      logContent.scrollTop = logContent.scrollHeight;
+    });
+
+    window.k8sApi.onPodLogEnd(sid, () => {
+      if (!fullLogs) {
+        logContent.textContent = '(No log output returned — container may have produced no logs)';
+      }
+    });
+
+    window.k8sApi.onPodLogError(sid, (msg) => {
+      logContent.textContent += `\n[Log Error: ${msg}]`;
+    });
+
+    try {
+      await window.k8sApi.startPodLogs(data.kubeconfig, data.context, namespace, podName, containerName, { previous: isPrevious, tailLines: 300 }, sid);
+    } catch (err) {
+      logContent.textContent = `Failed to fetch logs: ${err.message}`;
+    }
+  }
+}
+
+function handleAiRunCommand(cmd) {
+  if (!cmd || typeof cmd !== 'string') return;
+
+  const isPrevious = cmd.includes('--previous');
+  const containerMatch = cmd.match(/-c\s+([^\s]+)/) || cmd.match(/--container[=\s]([^\s]+)/);
+  const containerName = containerMatch ? containerMatch[1] : undefined;
+  const namespaceMatch = cmd.match(/-n\s+([^\s]+)/) || cmd.match(/--namespace[=\s]([^\s]+)/);
+
+  const data = state.manage;
+  const row = data.selected;
+  const namespace = namespaceMatch ? namespaceMatch[1] : (row ? manageRowNamespace(row) : (data.namespace || 'default'));
+
+  let podName = row ? row.name : null;
+  const parts = cmd.replace(/^kubectl\s+(?:-n\s+[^\s]+\s+)?logs\s+/, '').split(/\s+/);
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.startsWith('-')) {
+      if (['--previous', '-f', '--follow'].includes(p)) continue;
+      if (['-c', '-n', '--container', '--namespace', '--tail'].includes(p)) { i++; continue; }
+      continue;
+    }
+    if (p) { podName = p; break; }
+  }
+
+  if (podName) {
+    showFetchedLogsModal(cmd, podName, namespace, containerName, isPrevious);
+  }
+
+  switchManageTab('logs');
+}
+
+document.body.addEventListener('ai-run-command', (e) => {
+  if (e.detail && e.detail.command) {
+    handleAiRunCommand(e.detail.command);
+  }
+});
+
 function renderManageDrawerActions(kind, row) {
   const actions = getManageActionsFor(kind, row);
   const locked = !state.manage.writeUnlocked;
@@ -4455,7 +4577,7 @@ function showAiAnalysisDetailModal(record) {
   cardBox.appendChild(headerRow);
 
   const cardContent = document.createElement('div');
-  renderAnalysisResult(cardContent, record.result);
+  renderAnalysisResult(cardContent, record.result, handleAiRunCommand);
   cardBox.appendChild(cardContent);
   detailModal.appendChild(cardBox);
   document.body.appendChild(detailModal);

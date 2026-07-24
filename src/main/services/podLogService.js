@@ -65,6 +65,7 @@ async function startPodLogs(ref, contextName, namespace, pod, container, opts, s
       follow: opts?.follow !== false,
       tailLines: opts?.tailLines,
       timestamps: !!opts?.timestamps,
+      previous: !!opts?.previous,
     });
     if (!logSessions.has(sid)) {
       try { req.abort(); } catch { /* ignore */ }

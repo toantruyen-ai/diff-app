@@ -145,25 +145,116 @@ function analyzeLogSignal(ctx) {
   if (!logs) return findings;
 
   const errorPatterns = [
-    { pattern: /panic:/i, msg: 'Go panic detected in logs' },
-    { pattern: /NullPointerException|java\.lang\./i, msg: 'Java Exception detected in logs' },
-    { pattern: /Fatal error|UnhandledPromiseRejection/i, msg: 'Fatal application error detected' },
-    { pattern: /ECONNREFUSED|connection refused/i, msg: 'Database or external service connection refused' },
+    {
+      pattern: /address already in use|EADDRINUSE/i,
+      title: 'Port Conflict (EADDRINUSE)',
+      category: 'network',
+      confidence: 'high',
+      summary: 'Container failed to bind port because the address/port is already in use by another process.',
+      suggestedFixes: [
+        'Check container entrypoint and ensure port is not bound twice',
+        'Update container containerPort or service targetPort specification',
+      ],
+      cmd: `kubectl get pod ${ctx.podName} -n ${ctx.namespace} -o yaml`,
+    },
+    {
+      pattern: /permission denied|EACCES/i,
+      title: 'Permission Denied (EACCES)',
+      category: 'config',
+      confidence: 'high',
+      summary: 'Container process was denied access when reading/writing a file or opening a socket.',
+      suggestedFixes: [
+        'Check securityContext.runAsUser and runAsGroup permissions',
+        'Verify volumeMounts file permissions or fsGroup settings',
+      ],
+      cmd: `kubectl describe pod ${ctx.podName} -n ${ctx.namespace}`,
+    },
+    {
+      pattern: /no space left on device|ENOSPC/i,
+      title: 'Disk Space Exhausted (ENOSPC)',
+      category: 'resource',
+      confidence: 'high',
+      summary: 'Container node or volume ran out of available disk storage space.',
+      suggestedFixes: [
+        'Clean up temporary files or log volume directory',
+        'Expand PersistentVolumeClaim (PVC) size or emptyDir.sizeLimit',
+      ],
+      cmd: `kubectl describe node`,
+    },
+    {
+      pattern: /SyntaxError|ImportError|ModuleNotFoundError|ClassNotFoundException|NoSuchMethodError/i,
+      title: 'Application Code / Dependency Error',
+      category: 'app',
+      confidence: 'high',
+      summary: 'Container application failed to start due to missing dependency, module, or syntax error in code.',
+      suggestedFixes: [
+        'Fix missing module/dependency in application container build',
+        'Rebuild and push updated container image tag',
+      ],
+      cmd: `kubectl describe pod ${ctx.podName} -n ${ctx.namespace}`,
+    },
+    {
+      pattern: /panic:|fatal error:|NullPointerException|java\.lang\.|UnhandledPromiseRejection|SIGSEGV|Segmentation fault/i,
+      title: 'Application Runtime Crash / Panic',
+      category: 'app',
+      confidence: 'high',
+      summary: 'Application runtime encountered an unhandled exception or memory crash.',
+      suggestedFixes: [
+        'Review application stack trace and handle unhandled runtime exception',
+        'Verify environment variables and configuration secrets passed to container',
+      ],
+      cmd: `kubectl describe pod ${ctx.podName} -n ${ctx.namespace}`,
+    },
+    {
+      pattern: /ECONNREFUSED|connection refused|connect ECONNREFUSED|dial tcp.*refused/i,
+      title: 'Service Connection Refused (ECONNREFUSED)',
+      category: 'network',
+      confidence: 'high',
+      summary: 'Container application attempted to connect to a database or upstream service that refused connection.',
+      suggestedFixes: [
+        'Verify target service endpoint, IP, and port configuration',
+        'Ensure target database/service pod is running and accepting connections in namespace',
+      ],
+      cmd: `kubectl get endpoints,svc -n ${ctx.namespace}`,
+    },
   ];
 
   for (const item of errorPatterns) {
     if (item.pattern.test(logs)) {
+      const matchLine = logs.split('\n').find((line) => item.pattern.test(line)) || item.title;
       findings.push({
-        id: `log-signal-${item.msg.replace(/\s+/g, '-').toLowerCase()}`,
-        title: item.msg,
-        category: 'app',
-        confidence: 'low',
-        summary: `Application logs contain pattern indicating runtime crash: ${item.msg}`,
-        evidence: [logs.split('\n').find((line) => item.pattern.test(line)) || item.msg],
-        suggestedFixes: ['Inspect application source code and environment configuration'],
+        id: `log-signal-${item.title.replace(/\s+/g, '-').toLowerCase()}`,
+        title: item.title,
+        category: item.category,
+        confidence: item.confidence,
+        summary: item.summary,
+        evidence: [matchLine.trim()],
+        suggestedFixes: item.suggestedFixes,
+        commands: [item.cmd],
       });
     }
   }
+
+  if (findings.length === 0 && logs.trim()) {
+    const errorLines = logs.split('\n').filter((line) => /error|fatal|fail|exception|panic/i.test(line));
+    if (errorLines.length > 0) {
+      const sample = errorLines.slice(-3).map((l) => l.trim());
+      findings.push({
+        id: 'log-signal-generic-error',
+        title: 'Application Crash Error in Previous Logs',
+        category: 'app',
+        confidence: 'medium',
+        summary: 'Application terminated after printing runtime errors in logs.',
+        evidence: sample,
+        suggestedFixes: [
+          'Review extracted error lines above and check environment configuration',
+          'Inspect application entrypoint script and container image',
+        ],
+        commands: [`kubectl describe pod ${ctx.podName} -n ${ctx.namespace}`],
+      });
+    }
+  }
+
   return findings;
 }
 

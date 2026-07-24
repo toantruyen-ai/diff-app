@@ -23,6 +23,7 @@ async function analyzePod(ref, contextName, namespace, podName, options = {}) {
     finalResult = {
       ...retryResult.data,
       degraded: false,
+      logsPrevious: ctx.logsPrevious || '',
     };
   } else {
     // Graceful degradation fallback to rule engine findings
@@ -30,6 +31,7 @@ async function analyzePod(ref, contextName, namespace, podName, options = {}) {
     finalResult = {
       ...fallbackResult,
       fallbackReason: retryResult.error || 'LLM execution failed or unavailable',
+      logsPrevious: ctx.logsPrevious || '',
     };
   }
 

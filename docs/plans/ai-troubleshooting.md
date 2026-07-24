@@ -226,6 +226,11 @@ Khi người dùng chọn một Pod và bấm sang tab **AI Analyze**:
 4. **Lưu trữ tập trung vào Audit Database (`auditDb`)**: Toàn bộ kết quả chẩn đoán AI (`ai_analysis_history`) không lưu trong file SQLite cục bộ mà được lưu tập trung vào bảng `k8senvdiff_ai_analysis` thuộc Audit Database (Azure SQL), bảo đảm tính toàn vẹn và hỗ trợ tra cứu tập trung theo `cluster_id`.
 5. **Fallback tự động & Chẩn đoán tươi (`runPodAnalysis`)**: Nếu Pod chưa có lịch sử chẩn đoán nào trong Audit Database, hệ thống sẽ tự động kích hoạt đợt phân tích AI mới. Người dùng cũng có thể bấm nút **`⚡ Run AI Diagnosis`** bất cứ lúc nào để chạy chẩn đoán tươi và lưu bản ghi mới vào Audit Database.
 6. **Bảo vệ bất đồng bộ (Stale Response Guard)**: Mọi thao tác gọi API bất đồng bộ (`analyzePod`, `getAnalysisHistory`) đều kiểm tra `state.manage.selected` xem Pod hiển thị có đúng là Pod ban đầu hay không trước khi cập nhật DOM UI.
+7. **Tự động gửi 70 dòng Log `--previous` qua Kubernetes REST API & Tối ưu Rule Engine (`troubleshootingCollectorService`, `troubleshootingPromptService`, `troubleshootingAnalyzerService`)**:
+   - **Lấy Log chuẩn qua REST API (`CoreV1Api.readNamespacedPodLog`)**: Sử dụng chính xác tham số vị trí số 8 (`previous = true`) và vị trí số 10 (`tailLines = 70`) trong Kubernetes JavaScript SDK `@kubernetes/client-node` để truy vấn 70 dòng log đợt crash cũ gần nhất của toàn bộ containers (bao gồm init containers).
+   - **Ưu tiên hàng đầu trong AI Prompt**: Log `--previous` được đặt tại vị trí ưu tiên số 1 trong Prompt gửi cho AI (`--- PRIMARY LOG SOURCE: Previous Container Crash Log (--previous) ---`).
+   - **Mở rộng Rule Engine tự động phát hiện lỗi Log (`analyzeLogSignal`)**: Nhận diện tự động các mẫu lỗi phổ biến từ Crash Log (`EADDRINUSE`, `EACCES`, `ENOSPC`, `ImportError`/`SyntaxError`, `panic`/`NullPointerException`, `ECONNREFUSED`) để tạo ngay các bước sửa lỗi (**Suggested Fixes**) và lệnh khắc phục (**Recommended Commands**) cụ thể ngay cả khi không có kết nối AI CLI.
+   - **Khối xem Log trích xuất trực quan (`troubleshootingView.js`)**: Hiển thị khối collapsible `📜 Ingested Crash Logs (--previous) & Diagnostic Status` trên card báo cáo AI Analyze để người dùng chủ động kiểm tra đúng 70 dòng crash logs đã được trích xuất.
 
 ## 13. Cấu trúc module
 

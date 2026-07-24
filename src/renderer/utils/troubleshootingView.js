@@ -37,8 +37,8 @@ function renderAnalysisResult(containerEl, result) {
   const commandsHtml = (result.commands || [])
     .map(
       (cmd, i) => `
-    <div class="cmd-row" style="background: #0d1117; padding: 8px; border-radius: 4px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
-      <code style="font-size: 0.85rem; color: #58a6ff;">${escHtml(cmd)}</code>
+    <div class="cmd-row" style="background: #0d1117; padding: 8px; border-radius: 4px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+      <code style="font-size: 0.85rem; color: #58a6ff; word-break: break-all;">${escHtml(cmd)}</code>
       <div style="display: flex; gap: 6px;">
         <button class="btn btn-xs btn-ghost copy-cmd-btn" data-cmd-index="${i}">Copy</button>
       </div>
@@ -95,8 +95,33 @@ function renderAnalysisResult(containerEl, result) {
             </div>`
           : ''
       }
+
+      ${
+        result.logsPrevious
+          ? `<details style="margin-top: 12px; background: #0d1117; padding: 8px 12px; border-radius: 6px; border: 1px solid #30363d;">
+              <summary style="font-size: 0.83rem; color: #58a6ff; cursor: pointer; font-weight: bold; user-select: none;">
+                📜 Ingested Crash Logs (--previous) & Diagnostic Status
+              </summary>
+              <pre style="margin-top: 8px; margin-bottom: 0; font-size: 0.78rem; color: #c9d1d9; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow-y: auto; background: #161b22; padding: 8px; border-radius: 4px;">${escHtml(result.logsPrevious)}</pre>
+            </details>`
+          : ''
+      }
     </div>
   `;
+
+  containerEl.querySelectorAll('.run-cmd-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.cmdIndex, 10);
+      const cmd = result.commands[idx];
+      if (cmd && onRunCommand) {
+        onRunCommand(cmd);
+      } else if (cmd) {
+        const ev = new CustomEvent('ai-run-command', { detail: { command: cmd }, bubbles: true });
+        containerEl.dispatchEvent(ev);
+      }
+    });
+  });
 
   containerEl.querySelectorAll('.copy-cmd-btn').forEach((btn) => {
     btn.addEventListener('click', (e) => {

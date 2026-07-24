@@ -3,7 +3,7 @@ const { buildKubeConfig } = require('../utils/k8sHelper');
 const { redactContext } = require('./troubleshootingRedactorService');
 
 async function collectPodContext(ref, contextName, namespace, podName, opts = {}) {
-  const tailLines = opts.tailLines || 200;
+  const tailLines = opts.tailLines || 70;
   const kc = buildKubeConfig(ref, contextName);
   const coreApi = kc.makeApiClient(k8s.CoreV1Api);
 
@@ -47,38 +47,53 @@ async function collectPodContext(ref, contextName, namespace, podName, opts = {}
     };
   });
 
-  const mainContainerName = containers[0]?.name || pod.spec?.containers?.[0]?.name;
+  const allContainers = [
+    ...(pod.spec?.initContainers || []).map((c) => ({ name: c.name, isInit: true })),
+    ...(pod.spec?.containers || []).map((c) => ({ name: c.name, isInit: false })),
+  ];
 
-  let logsPrevious = '';
-  let logsCurrent = '';
+  const combinedLogsPrevious = [];
+  const combinedLogsCurrent = [];
 
-  if (mainContainerName) {
-    try {
-      const prevRes = await coreApi.readNamespacedPodLog(
-        podName,
-        namespace,
-        mainContainerName,
-        undefined,
-        false,
-        undefined,
-        undefined,
-        false,
-        undefined,
-        tailLines,
-        true
-      );
-      logsPrevious = typeof prevRes.body === 'string' ? prevRes.body : JSON.stringify(prevRes.body || '');
-    } catch {
-      logsPrevious = '';
+  for (const c of allContainers) {
+    const cs = containers.find((item) => item.name === c.name) || {};
+    const restartCount = cs.restartCount || 0;
+
+    if (restartCount > 0) {
+      try {
+        const prevRes = await coreApi.readNamespacedPodLog(
+          podName,
+          namespace,
+          c.name,
+          false,
+          undefined,
+          undefined,
+          undefined,
+          true,
+          undefined,
+          tailLines,
+          false
+        );
+        const pText = typeof prevRes.body === 'string' ? prevRes.body : JSON.stringify(prevRes.body || '');
+        if (pText && pText.trim()) {
+          combinedLogsPrevious.push(`=== Previous Log (--previous) [container: ${c.name}${c.isInit ? ' (init)' : ''} | restarts: ${restartCount}] ===\n${pText.trim()}`);
+        } else {
+          combinedLogsPrevious.push(`=== Previous Log (--previous) [container: ${c.name}] ===\n(Container restarted ${restartCount} times, but previous log was empty or rotated by Node)`);
+        }
+      } catch (err) {
+        combinedLogsPrevious.push(`=== Previous Log (--previous) [container: ${c.name}] ===\n(Container restarted ${restartCount} times, but API returned: ${err.message || 'Log unavailable'})`);
+      }
+    } else {
+      combinedLogsPrevious.push(`=== Previous Log (--previous) [container: ${c.name}] ===\n(No previous crash log — container has restartCount = 0)`);
     }
 
     try {
       const currRes = await coreApi.readNamespacedPodLog(
         podName,
         namespace,
-        mainContainerName,
-        undefined,
+        c.name,
         false,
+        undefined,
         undefined,
         undefined,
         false,
@@ -86,11 +101,17 @@ async function collectPodContext(ref, contextName, namespace, podName, opts = {}
         tailLines,
         false
       );
-      logsCurrent = typeof currRes.body === 'string' ? currRes.body : JSON.stringify(currRes.body || '');
+      const cText = typeof currRes.body === 'string' ? currRes.body : JSON.stringify(currRes.body || '');
+      if (cText && cText.trim()) {
+        combinedLogsCurrent.push(`=== Current Log [container: ${c.name}${c.isInit ? ' (init)' : ''}] ===\n${cText.trim()}`);
+      }
     } catch {
-      logsCurrent = '';
+      /* ignore log read error */
     }
   }
+
+  const logsPrevious = combinedLogsPrevious.join('\n\n');
+  const logsCurrent = combinedLogsCurrent.join('\n\n');
 
   let grafanaTelemetry = null;
   try {
